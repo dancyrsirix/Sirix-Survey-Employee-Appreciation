@@ -103,7 +103,7 @@ test('submit once per colleague, partial answers allowed, empty rejected, self r
   assert.equal(r.status, 200, r.text);
   r = await http('POST', `/api/survey/${alice.code}/submit`, { group_id: 'staff', target_id: bob.id, answers: { [rating.id]: 1 } });
   assert.equal(r.status, 400);
-  assert.match(r.json.error, /already/);
+  assert.match(r.json.error, /déjà/);
   const sv = (await http('GET', `/api/survey/${alice.code}`)).json;
   assert.equal(sv.groups[0].targets.find(t => t.id === bob.id).done, true);
   // operator cannot submit into the staff survey
@@ -147,6 +147,59 @@ test('results hide people under the minimum and show them above it', async () =>
   assert.match(links.text, /\/s\/[A-Z2-9]{10}/);
 });
 
+test('default question set is 5 categorized statements plus one comment', () => {
+  const qs = db.listQuestions('staff');
+  assert.equal(qs.length, 6);
+  assert.equal(qs.filter(q => q.type === 'rating').length, 5);
+  assert.deepEqual(qs.filter(q => q.type === 'rating').map(q => q.category),
+    ['Fiabilité et suivis', 'Réactivité et communication', 'Disponibilité et collaboration', 'Côté humain', 'Qualité du travail']);
+  assert.equal(qs[5].type, 'text');
+});
+
+test('personal reports are only visible to the employee once released, and only with enough evaluations', async () => {
+  const emps = db.listEmployees();
+  const bob = emps.find(e => e.role === 'IT Manager');      // has 3 evaluations from the previous test
+  const alice = emps.find(e => e.role === 'HR Manager');    // has none
+  // not released yet: nothing
+  let r = await http('GET', `/api/survey/${bob.code}/reports`);
+  assert.equal(r.status, 200);
+  assert.equal(r.json.reports.length, 0);
+  // admin preview works regardless of status
+  r = await http('GET', '/api/admin/reports/staff');
+  assert.equal(r.status, 200);
+  const bobRep = r.json.reports.find(x => x.person.id === bob.id);
+  assert.equal(bobRep.person.visible, true);
+  assert.equal(bobRep.categories.length, 5);
+  assert.ok(bobRep.categories.some(c => c.mine && c.mine.n === 3));
+  assert.ok(bobRep.overall.company > 0);
+  assert.equal(r.json.reports.find(x => x.person.id === alice.id).person.visible, false);
+  // release
+  assert.equal((await http('PUT', '/api/admin/groups/staff', { status: 'released' })).status, 200);
+  r = await http('GET', `/api/survey/${bob.code}/reports`);
+  assert.equal(r.json.reports.length, 1);
+  assert.equal(r.json.reports[0].person.name, bob.name);
+  assert.equal(r.json.reports[0].person.visible, true);
+  r = await http('GET', `/api/survey/${alice.code}/reports`);
+  assert.equal(r.json.reports[0].person.visible, false);
+  assert.deepEqual(r.json.reports[0].comments, {});
+  // released also means closed for submissions
+  const rating = db.listQuestions('staff').find(q => q.type === 'rating');
+  r = await http('POST', `/api/survey/${alice.code}/submit`, { group_id: 'staff', target_id: bob.id, answers: { [rating.id]: 5 } });
+  assert.equal(r.status, 400);
+  await http('PUT', '/api/admin/groups/staff', { status: 'open' });
+  // the survey page tells the employee which surveys are released
+  const page = (await http('GET', `/api/survey/${bob.code}`)).json;
+  assert.equal(page.groups[0].status, 'open');
+});
+
+test('restore default questions', async () => {
+  await http('PUT', '/api/admin/groups/ops/questions', { questions: [{ text: 'Only one', type: 'rating', category: 'X' }] });
+  assert.equal(db.listQuestions('ops').length, 1);
+  const r = await http('POST', '/api/admin/groups/ops/questions/restore');
+  assert.equal(r.status, 200);
+  assert.equal(r.json.length, 6);
+});
+
 test('closing a survey blocks submissions', async () => {
   const emps = db.listEmployees();
   const a = emps.find(e => e.role === 'Controller'), b = emps.find(e => e.role === 'VP Sales');
@@ -154,7 +207,7 @@ test('closing a survey blocks submissions', async () => {
   assert.equal((await http('PUT', '/api/admin/groups/staff', { status: 'closed' })).status, 200);
   const r = await http('POST', `/api/survey/${a.code}/submit`, { group_id: 'staff', target_id: b.id, answers: { [rating.id]: 5 } });
   assert.equal(r.status, 400);
-  assert.match(r.json.error, /closed/);
+  assert.match(r.json.error, /fermé/);
   await http('PUT', '/api/admin/groups/staff', { status: 'open' });
 });
 

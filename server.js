@@ -121,9 +121,9 @@ function route(method, pattern, handler) { routes.push({ method, pattern, handle
 
 // Public: survey access
 route('GET', /^\/api\/survey\/([A-Za-z0-9-]+)$/, (req, res, m) => {
-  if (limited('code:' + clientIp(req), 60, 60_000)) return json(res, 429, { error: 'Too many attempts. Please wait a minute.' });
+  if (limited('code:' + clientIp(req), 60, 60_000)) return json(res, 429, { error: 'Trop de tentatives. Attends une minute.' });
   const emp = db.getEmployeeByCode(m[1]);
-  if (!emp) return json(res, 404, { error: 'This access code is not valid. Please check it and try again.' });
+  if (!emp) return json(res, 404, { error: 'Ce code d’accès n’est pas valide. Vérifie-le et réessaie.' });
   json(res, 200, {
     employee: { name: emp.name, department: emp.department },
     orgName: db.getSetting('org_name'),
@@ -132,13 +132,22 @@ route('GET', /^\/api\/survey\/([A-Za-z0-9-]+)$/, (req, res, m) => {
   });
 });
 route('POST', /^\/api\/survey\/([A-Za-z0-9-]+)\/submit$/, async (req, res, m) => {
-  if (limited('submit:' + clientIp(req), 120, 60_000)) return json(res, 429, { error: 'Too many requests. Please wait a minute.' });
+  if (limited('submit:' + clientIp(req), 120, 60_000)) return json(res, 429, { error: 'Trop de requêtes. Attends une minute.' });
   const emp = db.getEmployeeByCode(m[1]);
-  if (!emp) return json(res, 404, { error: 'This access code is not valid.' });
+  if (!emp) return json(res, 404, { error: 'Ce code d’accès n’est pas valide.' });
   const body = await readJson(req);
   const result = db.submitEvaluation(emp, String(body.group_id || ''), String(body.target_id || ''), body.answers || {});
   if (result.error) return json(res, 400, result);
   json(res, 200, { ok: true });
+});
+
+route('GET', /^\/api\/survey\/([A-Za-z0-9-]+)\/reports$/, (req, res, m) => {
+  if (limited('code:' + clientIp(req), 60, 60_000)) return json(res, 429, { error: 'Trop de tentatives. Attends une minute.' });
+  const emp = db.getEmployeeByCode(m[1]);
+  if (!emp) return json(res, 404, { error: 'Ce code d’accès n’est pas valide.' });
+  // Only surveys whose results have been released by the admin.
+  const reports = emp.groups.map(gid => db.getGroup(gid)).filter(g => g && g.status === 'released').map(g => db.reportFor(g.id, emp.id)).filter(Boolean);
+  json(res, 200, { employee: { name: emp.name, department: emp.department }, orgName: db.getSetting('org_name'), reports });
 });
 
 // Admin: auth
@@ -220,6 +229,14 @@ route('GET', /^\/api\/admin\/results\/([a-z0-9_-]+)\.csv$/, admin((req, res, m) 
   }
   send(res, 200, '﻿' + lines.join('\r\n'), { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="results-${m[1]}.csv"` });
 }));
+route('GET', /^\/api\/admin\/reports\/([a-z0-9_-]+)$/, admin((req, res, m) => {
+  if (!db.getGroup(m[1])) return json(res, 404, { error: 'Unknown survey.' });
+  json(res, 200, { orgName: db.getSetting('org_name'), baseUrl: baseUrl(req), reports: db.allReports(m[1]) });
+}));
+route('POST', /^\/api\/admin\/groups\/([a-z0-9_-]+)\/questions\/restore$/, admin((req, res, m) => {
+  if (!db.getGroup(m[1])) return json(res, 404, { error: 'Unknown survey.' });
+  json(res, 200, seed.restoreDefaultQuestions(m[1]));
+}));
 route('GET', /^\/api\/admin\/links\.csv$/, admin((req, res) => {
   const base = baseUrl(req);
   const lines = [['Name', 'Department', 'Role', 'Email', 'Access code', 'Personal link'].join(',')];
@@ -274,7 +291,7 @@ route('PUT', /^\/api\/admin\/groups\/([a-z0-9_-]+)$/, admin(async (req, res, m) 
   const fields = {};
   if (typeof body.name === 'string' && body.name.trim()) fields.name = body.name.trim();
   if (typeof body.description === 'string') fields.description = body.description.trim();
-  if (body.status === 'open' || body.status === 'closed') fields.status = body.status;
+  if (['open', 'closed', 'released'].includes(body.status)) fields.status = body.status;
   const g = db.updateGroup(m[1], fields);
   if (!g) return json(res, 404, { error: 'Unknown survey.' });
   json(res, 200, g);
@@ -283,7 +300,7 @@ route('PUT', /^\/api\/admin\/groups\/([a-z0-9_-]+)\/questions$/, admin(async (re
   if (!db.getGroup(m[1])) return json(res, 404, { error: 'Unknown survey.' });
   const body = await readJson(req);
   const qs = (Array.isArray(body.questions) ? body.questions : [])
-    .map(q => ({ id: q.id, text: String(q.text || '').trim().slice(0, 500), type: q.type === 'text' ? 'text' : 'rating' }))
+    .map(q => ({ id: q.id, text: String(q.text || '').trim().slice(0, 500), type: q.type === 'text' ? 'text' : 'rating', category: String(q.category || '').trim().slice(0, 100) }))
     .filter(q => q.text);
   if (!qs.length) return json(res, 400, { error: 'At least one question is required.' });
   json(res, 200, db.replaceQuestions(m[1], qs));
@@ -357,6 +374,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/') return serveStatic(req, res, 'index.html');
     if (p.startsWith('/s/') || p === '/s') return serveStatic(req, res, 'survey.html');
     if (p === '/admin' || p === '/admin/') return serveStatic(req, res, 'admin.html');
+    if (p === '/admin/reports') return serveStatic(req, res, 'reports.html');
     return serveStatic(req, res, p.replace(/^\/+/, ''));
   } catch (e) {
     console.error(e);

@@ -14,7 +14,7 @@
       else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
       else if (v != null && v !== false) el.setAttribute(k, v === true ? '' : v);
     }
-    for (const c of children.flat()) if (c != null && c !== false) el.append(c.nodeType ? c : document.createTextNode(String(c)));
+    for (const c of children.flat(Infinity)) if (c != null && c !== false) el.append(c.nodeType ? c : document.createTextNode(String(c)));
     return el;
   }
   async function api(method, url, body) {
@@ -61,12 +61,12 @@
 
   // ---------- layout ----------
   function render() {
-    const tabs = [['results', 'Results'], ['employees', 'Employees & links'], ['questions', 'Surveys & questions'], ['settings', 'Settings & demo data']];
+    const tabs = [['results', 'Results'], ['reports', 'Individual reports'], ['employees', 'Employees & links'], ['questions', 'Surveys & questions'], ['settings', 'Settings & demo data']];
     app.replaceChildren(
       h('div', { class: 'tabs' }, tabs.map(([id, label]) => h('button', { class: id === tab ? 'active' : '', onclick: () => { tab = id; render(); } }, label))),
       h('div', { id: 'tab' }, h('p', { class: 'muted' }, 'Loading...')),
     );
-    ({ results: renderResults, employees: renderEmployees, questions: renderQuestions, settings: renderSettings })[tab]();
+    ({ results: renderResults, reports: renderReports, employees: renderEmployees, questions: renderQuestions, settings: renderSettings })[tab]();
   }
   const setTab = (...nodes) => document.getElementById('tab').replaceChildren(...nodes);
 
@@ -94,7 +94,7 @@
 
     // Department summary
     const deptTable = h('table', null,
-      h('thead', null, h('tr', null, h('th', null, 'Department'), h('th', { class: 'num' }, 'Evaluations'), h('th', { class: 'num' }, 'Overall'), ratingQs.map((q, i) => h('th', { class: 'num', title: q.text }, 'Q' + (i + 1))))),
+      h('thead', null, h('tr', null, h('th', null, 'Department'), h('th', { class: 'num' }, 'Evaluations'), h('th', { class: 'num' }, 'Overall'), ratingQs.map((q, i) => h('th', { class: 'num', title: q.text }, q.category || 'Q' + (i + 1))))),
       h('tbody', null, r.departments.filter(d => !resultsDept || d.name === resultsDept).map(d => h('tr', null,
         h('td', null, d.name), h('td', { class: 'num' }, d.responses),
         h('td', { class: 'num' }, d.visible ? h('span', { class: scoreClass(d.overall) }, fmt(d.overall)) : h('span', { class: 'pill hidden' }, 'not enough data')),
@@ -114,7 +114,7 @@
         rows.push(h('tr', null, h('td', { colspan: 3 + ratingQs.length }, h('div', { class: 'detail' },
           ratingQs.map((q, i) => {
             const s = p.ratings[q.id];
-            return h('div', { class: 'small', style: 'margin-bottom:4px' }, h('b', null, 'Q' + (i + 1) + ': '), q.text, ' ',
+            return h('div', { class: 'small', style: 'margin-bottom:4px' }, h('b', null, (q.category || 'Q' + (i + 1)) + ': '), q.text, ' ',
               s ? [h('span', { class: scoreClass(s.avg) }, fmt(s.avg)), ` (${s.n} answers)`, h('span', { class: 'dist', title: '1 to 5 distribution: ' + s.dist.join(' / ') }, s.dist.map(n => h('span', { style: `height:${4 + n * 4}px` })))] : h('span', { class: 'muted' }, 'no answers'));
           }),
           textQs.map(q => h('div', null, h('h3', null, q.text), (p.comments[q.id] || []).length ? h('ul', null, p.comments[q.id].map(c => h('li', null, c))) : h('p', { class: 'muted small' }, 'No comments.'))),
@@ -122,14 +122,14 @@
       }
     }
     const peopleTable = h('table', null,
-      h('thead', null, h('tr', null, h('th', null, 'Person'), h('th', { class: 'num' }, 'Evaluations'), h('th', { class: 'num' }, 'Overall'), ratingQs.map((q, i) => h('th', { class: 'num', title: q.text }, 'Q' + (i + 1))))),
+      h('thead', null, h('tr', null, h('th', null, 'Person'), h('th', { class: 'num' }, 'Evaluations'), h('th', { class: 'num' }, 'Overall'), ratingQs.map((q, i) => h('th', { class: 'num', title: q.text }, q.category || 'Q' + (i + 1))))),
       h('tbody', null, rows));
 
     setTab(
       h('div', { class: 'card' }, h('h2', null, r.group.name), controls, h('div', { style: 'height:12px' }), stats),
       h('div', { class: 'card' }, h('h2', null, 'By department'), h('p', { class: 'muted small' }, 'Average score across all evaluations received by people in the department (1 to 5).'), h('div', { class: 'table-wrap' }, deptTable)),
       h('div', { class: 'card' }, h('h2', null, 'By person'), h('p', { class: 'muted small' }, 'Click a row to see the breakdown and written comments. People with fewer evaluations than the minimum stay hidden to protect anonymity.'), h('div', { class: 'table-wrap' }, peopleTable),
-        h('h3', null, 'Questions'), h('ol', { class: 'small muted' }, ratingQs.map(q => h('li', null, q.text)))),
+        h('h3', null, 'Statements'), h('ol', { class: 'small muted' }, ratingQs.map(q => h('li', null, q.category ? [h('b', null, q.category + ': '), q.text] : q.text)))),
     );
   }
 
@@ -201,12 +201,16 @@
     setTab(...ov.groups.map(g => {
       const name = h('input', { type: 'text', value: g.name });
       const desc = h('textarea', { style: 'min-height:60px' }, g.description);
-      const status = h('select', null, h('option', { value: 'open', selected: g.status === 'open' }, 'Open (employees can submit)'), h('option', { value: 'closed', selected: g.status === 'closed' }, 'Closed (no more submissions)'));
+      const status = h('select', null,
+        h('option', { value: 'open', selected: g.status === 'open' }, 'Open (employees can submit)'),
+        h('option', { value: 'closed', selected: g.status === 'closed' }, 'Closed (no more submissions, reports not shared yet)'),
+        h('option', { value: 'released', selected: g.status === 'released' }, 'Closed and reports released (each employee can see their own report)'));
       const list = h('div');
       const qs = g.questions.map(q => ({ ...q }));
       const draw = () => list.replaceChildren(...qs.map((q, i) => h('div', { class: 'qrow' },
         h('span', { class: 'muted small', style: 'width:22px' }, i + 1),
-        h('input', { type: 'text', value: q.text, oninput: (e) => { q.text = e.target.value; } }),
+        h('input', { type: 'text', class: 'cat', placeholder: 'Category (e.g. Fiabilité et suivis)', value: q.category || '', oninput: (e) => { q.category = e.target.value; } }),
+        h('input', { type: 'text', class: 'txt', placeholder: 'Statement', value: q.text, oninput: (e) => { q.text = e.target.value; } }),
         h('select', { onchange: (e) => { q.type = e.target.value; } }, h('option', { value: 'rating', selected: q.type === 'rating' }, 'Rating 1-5'), h('option', { value: 'text', selected: q.type === 'text' }, 'Free text')),
         h('button', { class: 'secondary', title: 'Move up', disabled: i === 0, onclick: () => { [qs[i - 1], qs[i]] = [qs[i], qs[i - 1]]; draw(); } }, '↑'),
         h('button', { class: 'danger', onclick: () => { qs.splice(i, 1); draw(); } }, '✕'),
@@ -217,12 +221,50 @@
         h('label', null, 'Survey name'), name, h('label', null, 'Introduction shown to employees'), desc, h('label', null, 'Status'), status,
         h('div', { class: 'actions' }, h('button', { onclick: async () => { try { await api('PUT', `/api/admin/groups/${g.id}`, { name: name.value, description: desc.value, status: status.value }); toast('Survey saved'); await loadOverview(); resultsCache = {}; } catch (ex) { toast(ex.message, 'error'); } } }, 'Save survey')),
         h('h3', null, 'Questions'),
-        h('p', { class: 'muted small' }, 'Rating questions are answered on a 1 to 5 scale. Every question can be skipped by the employee. Changing wording keeps existing answers; deleting a question deletes its answers from the results.'),
+        h('p', { class: 'muted small' }, 'Rating statements are answered on a 1 to 5 scale or N/A. The category is shown as a section title on the form and as the row label in reports. Changing wording keeps existing answers; deleting a statement deletes its answers from the results. Keep it short: 5 statements and 1 comment is the sweet spot for participation.'),
         list,
-        h('div', { class: 'actions' }, h('button', { class: 'secondary', onclick: () => { qs.push({ text: '', type: 'rating' }); draw(); } }, 'Add question'),
+        h('div', { class: 'actions' }, h('button', { class: 'secondary', onclick: () => { qs.push({ text: '', type: 'rating', category: '' }); draw(); } }, 'Add question'),
+          h('button', { class: 'secondary', onclick: async () => { if (!confirm('Replace the current questions with the default 5 statements and comment? Answers to removed questions are dropped from the results.')) return; try { await api('POST', `/api/admin/groups/${g.id}/questions/restore`); toast('Default questions restored'); await loadOverview(); resultsCache = {}; render(); } catch (ex) { toast(ex.message, 'error'); } } }, 'Restore default questions'),
           h('button', { onclick: async () => { try { await api('PUT', `/api/admin/groups/${g.id}/questions`, { questions: qs }); toast('Questions saved'); await loadOverview(); resultsCache = {}; render(); } catch (ex) { toast(ex.message, 'error'); } } }, 'Save questions')),
       );
     }));
+  }
+
+  // ---------- individual reports ----------
+  async function renderReports() {
+    if (!resultsGroup) return setTab(h('div', { class: 'card' }, 'No surveys configured.'));
+    const g = ov.groups.find(x => x.id === resultsGroup);
+    const r = resultsCache[resultsGroup] || (resultsCache[resultsGroup] = await api('GET', '/api/admin/results/' + resultsGroup));
+    const people = r.people.filter(p => !resultsDept || p.department === resultsDept);
+    const depts = [...new Set(r.people.map(p => p.department))].sort();
+    const emp = id => ov.employees.find(e => e.id === id) || {};
+    const ready = r.people.filter(p => p.visible).length;
+    const setStatus = async (status) => { try { await api('PUT', `/api/admin/groups/${g.id}`, { status }); toast('Survey updated'); await loadOverview(); resultsCache = {}; render(); } catch (ex) { toast(ex.message, 'error'); } };
+    const statusCard = h('div', { class: 'card' },
+      h('h2', null, 'Sending reports to employees'),
+      h('p', null, 'Each employee gets a personal report: their average per category next to the department and company averages, a "point fort", a priority to work on, and the constructive comments received. A report exists only for people with at least ', h('b', null, r.minResponses), ' evaluations.'),
+      h('p', null, 'Current status of this survey: ', h('span', { class: 'pill ' + (g.status === 'released' ? 'released' : g.status === 'closed' ? 'closed' : 'todo') }, g.status), ' · ', h('b', null, ready), ` of ${r.people.length} people have enough evaluations for a report.`),
+      h('ol', { class: 'small' },
+        h('li', null, 'When the evaluation period is over, close the survey (nobody can submit anymore). Review the comments below before releasing: they are shown to the person as written.'),
+        h('li', null, h('b', null, 'Release the reports.'), ' Each employee then sees their own report (and nobody else’s) when they open their personal link, the same link they used to fill out the survey.'),
+        h('li', null, 'Tell everyone the reports are available: download the links CSV in "Employees & links" and send a mail merge saying "Ton rapport est disponible sur ton lien personnel". Or print the reports to PDF below and email them one by one.')),
+      h('div', { class: 'actions' },
+        g.status === 'open' ? h('button', { class: 'secondary', onclick: () => { if (confirm('Close the survey? Employees will no longer be able to submit.')) setStatus('closed'); } }, 'Close the survey') : null,
+        g.status !== 'released' ? h('button', { class: 'accent', onclick: () => { if (confirm('Release the reports? Every employee with enough evaluations will be able to see their own report on their personal link.')) setStatus('released'); } }, 'Release reports to employees') : h('button', { class: 'secondary', onclick: () => setStatus('closed') }, 'Hide reports again'),
+        h('a', { class: 'btn', href: `/admin/reports?group=${g.id}`, target: '_blank', style: 'text-decoration:none' }, 'Open all reports (print / PDF)'),
+        h('a', { class: 'btn', href: '/api/admin/links.csv', style: 'text-decoration:none;background:#fff;color:#1a1a1a' }, 'Download links CSV')));
+    const controls = h('div', { class: 'row' },
+      h('select', { onchange: (e) => { resultsGroup = e.target.value; resultsDept = ''; renderReports(); } }, ov.groups.map(x => h('option', { value: x.id, selected: x.id === resultsGroup }, x.name))),
+      h('select', { onchange: (e) => { resultsDept = e.target.value; renderReports(); } }, h('option', { value: '' }, 'All departments'), depts.map(d => h('option', { value: d, selected: d === resultsDept }, d))));
+    const table = h('table', null,
+      h('thead', null, h('tr', null, h('th', null, 'Person'), h('th', null, 'Email'), h('th', { class: 'num' }, 'Evaluations'), h('th', null, 'Report'), h('th', null, ''))),
+      h('tbody', null, people.map(p => h('tr', null,
+        h('td', null, h('b', null, p.name), h('div', { class: 'small muted' }, [p.role, p.department].filter(Boolean).join(' · '))),
+        h('td', { class: 'small' }, emp(p.id).email || h('span', { class: 'muted' }, 'no email')),
+        h('td', { class: 'num' }, p.responses),
+        h('td', null, p.visible ? h('span', { class: 'pill done' }, 'ready') : h('span', { class: 'pill hidden' }, `needs ${r.minResponses}`)),
+        h('td', null, p.visible ? h('a', { href: `/admin/reports?group=${g.id}&employee=${p.id}`, target: '_blank' }, 'Preview') : '')))));
+    setTab(statusCard, h('div', { class: 'card' }, h('h2', null, 'Reports'), controls, h('div', { style: 'height:10px' }), h('div', { class: 'table-wrap' }, table)));
   }
 
   // ---------- settings & demo ----------

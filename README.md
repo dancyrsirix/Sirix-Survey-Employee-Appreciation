@@ -1,6 +1,6 @@
 # Sirix Employee Appreciation Survey
 
-A small, self-hosted web app where employees anonymously evaluate the colleagues they work with, including executives. Each person can evaluate every colleague once, can skip any question or any colleague, and nobody (not even the administrator) can see who wrote what.
+A small, self-hosted web app where employees anonymously evaluate the colleagues they work with, including executives. The employee side is in French and follows the Sirix "Sondage d’appréciation du travail" form: 5 statements (one per category) rated 1 to 5 or N/A, plus one optional constructive comment. Each person can evaluate every colleague once, can skip any statement or any colleague, and nobody (not even the administrator) can see who wrote what. Once the survey is over, every employee receives a personal report.
 
 No npm dependencies: it runs on Node.js 22+ with the built-in SQLite database.
 
@@ -10,8 +10,10 @@ No npm dependencies: it runs on Node.js 22+ with the built-in SQLite database.
   - `staff`: all non-operator employees, including executives.
   - `ops`: operators, supervisors, trainers and the operations manager (Yannick). A person can be in both.
 - **Personal access codes** for every employee. The code opens their survey and prevents evaluating the same colleague twice. It is never stored with the answers.
-- **Employee page** (`/` or `/s/CODE`): list of colleagues grouped by department, one short form per colleague, 1 to 5 ratings plus two free text questions. Every question is optional. Progress is kept, so people can come back later with the same code.
-- **Admin dashboard** (`/admin`): results by department and by person, written comments, CSV export, employee list with personal links, question editor, open/close each survey, sample data loader.
+- **Employee page** (`/` or `/s/CODE`): list of colleagues grouped by department and one short form per colleague, in French, in the layout of the paper form (scale legend, category rows, 1 to 5 and N/A columns, constructive comment). Takes about a minute per colleague. Progress is kept, so people can come back later with the same code.
+- **The 5 statements** (editable in the admin, same set for both surveys by default): Fiabilité et suivis, Réactivité et communication, Disponibilité et collaboration, Côté humain, Qualité du travail.
+- **Personal reports**: when you release the results, each employee sees their own report on their personal link: average per category next to the department and company averages, a "point fort", a priority to work on, and the constructive comments received. Reports can also be printed or saved as PDF from the admin.
+- **Admin dashboard** (`/admin`): results by department and by person, written comments, CSV export, employee list with personal links, question editor, open/close/release each survey, sample data loader.
 
 ## How anonymity works
 
@@ -88,3 +90,14 @@ Each employee gets a **personal link** of the form `https://your-domain/s/XXXXXX
 4. When the survey period is over, set each survey to **Closed** in **Surveys & questions**. Nobody can submit after that, and you can still view and export results.
 
 If someone loses their code, click **New code** next to their name and send them the new link. Their previous evaluations stay in place.
+
+## Sending each employee their report
+
+1. When the evaluation period is over, go to **Individual reports** and click **Close the survey**. Nobody can submit anymore.
+2. Read the comments in **Results** first. They are shown to the person exactly as written.
+3. Click **Release reports to employees**. From then on, each employee who opens their personal link (the same link they used for the survey) sees a "Voir mon rapport" button and only their own report. People with fewer evaluations than the minimum see a message instead of a report.
+4. Tell everyone: use the links CSV for a mail merge saying "Ton rapport d’appréciation est disponible sur ton lien personnel". Employees can print it or save it as PDF from the page.
+
+Alternative: **Open all reports (print / PDF)** shows every report on its own page, ready to print or save as PDF, and the **Preview** link next to each name opens a single report. You can then attach the PDF to an email yourself. Sending email directly from the app would need an SMTP relay; it is not built in.
+
+A survey set to "released" stays closed for submissions. You can hide the reports again by setting it back to closed.

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rapports d’appréciation</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header class="top"><div class="wrap">
+  <div><div class="logo">Sirix</div><div class="tagline">Toujours présents. Constamment vigilants.</div></div>
+  <div class="sub">Rapports individuels<br><a href="/admin" style="color:#fff">Retour à l’admin</a></div>
+</div></header>
+<main class="wrap" id="app"><div class="card"><p class="muted">Chargement...</p></div></main>
+<script src="/report.js"></script>
+<script>
+(async function () {
+  const app = document.getElementById('app');
+  const params = new URLSearchParams(location.search);
+  const group = params.get('group') || 'staff';
+  const employee = params.get('employee');
+  const r = await fetch('/api/admin/reports/' + encodeURIComponent(group));
+  if (r.status === 401) { app.innerHTML = '<div class="card"><p>Connecte-toi d’abord à <a href="/admin">/admin</a>.</p></div>'; return; }
+  const j = await r.json();
+  let list = j.reports.filter(Boolean);
+  if (employee) list = list.filter(x => x.person.id === employee);
+  const onlyVisible = params.get('all') !== '1';
+  const shown = onlyVisible ? list.filter(x => x.person.visible) : list;
+  const bar = document.createElement('div');
+  bar.className = 'card no-print';
+  bar.innerHTML = `<div class="row"><span class="muted small">${shown.length} rapport(s)${onlyVisible ? ' (seulement les personnes avec assez d’évaluations)' : ''}. Chaque rapport s’imprime sur sa propre page.</span>
+    <button onclick="window.print()">Imprimer / enregistrer en PDF</button></div>`;
+  app.replaceChildren(bar, ...shown.map(rep => { const c = document.createElement('div'); c.className = 'card'; c.append(window.renderReport(rep, { orgName: j.orgName })); return c; }));
+  if (!shown.length) app.append(Object.assign(document.createElement('div'), { className: 'card', textContent: 'Aucun rapport à afficher.' }));
+})();
+</script>
+</body>
+</html>
