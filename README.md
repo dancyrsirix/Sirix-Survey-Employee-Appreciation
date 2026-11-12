@@ -52,6 +52,19 @@ Tests: `npm test`
 
 In the admin, open **Settings & demo data** and click **Load sample employees and demo responses**. You get a fictional roster of 27 people across 7 departments, with Yannick in both surveys, and a few hundred randomly generated evaluations so the Results tab has something to show. Click **Delete everything** when you are ready to load the real list.
 
+## Deploying to your own Linux server (one command)
+
+On a Debian or Ubuntu server where you have SSH and sudo, with a DNS name already pointing to it:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dancyrsirix/Sirix-Survey-Employee-Appreciation/claude/anonymous-eval-app-oeiiy2/deploy/install.sh \
+  | sudo DOMAIN=sondage.example.com bash
+```
+
+The script installs Node 22 if needed, clones the branch into `/opt/sirix-survey`, runs the app as a systemd service under a dedicated user with the database in `/var/lib/sirix-survey`, and installs Caddy, which obtains and renews the HTTPS certificate automatically. Without `DOMAIN=` the app is served on `http://SERVER-IP:3000` instead. If the repository is private, pass `REPO_URL=https://TOKEN@github.com/dancyrsirix/Sirix-Survey-Employee-Appreciation.git` with a GitHub token.
+
+Re-running the same command updates the app and keeps the data. Logs: `journalctl -u sirix-survey -f`. Backup: copy `/var/lib/sirix-survey/survey.db`.
+
 ## Hosting it
 
 The app is a single Node process with a SQLite file. Any of these works:
