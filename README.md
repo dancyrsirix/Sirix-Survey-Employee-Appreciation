@@ -86,8 +86,8 @@ In **Employees & links**, paste a table into the import box. Two formats are rec
 
 1. **A directory export** (Microsoft 365 admin center user list, Entra, HR export), columns in any order:
    `Display name` (or `First name` + `Last name`), `Job Title`, `Department`, any column containing `Email`. Other columns
-   (Office Location, ...) are ignored. People whose department starts with "Operat" (Operators, Operations) go to the
-   `ops` survey, everyone else to `staff`. Add a `Survey` column to decide yourself.
+   (Office Location, ...) are ignored. People whose department is `Operators` go to the `ops` survey, everyone else
+   (including `Operation`) to `staff`. Add a `Survey` column to decide yourself.
 2. **The simple list**:
 
 ```

@@ -250,13 +250,14 @@ test('import from a Microsoft 365 directory export: header-mapped columns, surve
   assert.equal(d.role, 'Lead Content Writer');
   assert.equal(d.email, 'ddanish@example.com');
   assert.equal(d.department, 'Marketing');
-  assert.deepEqual(emps.find(e => e.name === 'Jannat Mehmood').groups, ['ops']);
+  assert.deepEqual(emps.find(e => e.name === 'Jannat Mehmood').groups, ['staff']);   // 'Operation' department is office staff
   assert.deepEqual(emps.find(e => e.name === 'Ali Khan').groups, ['ops']);   // name built from First + Last
   // Excel sheet with its own column order and extra columns, no email, no job title
-  const xls = 'Employee ID\tDepartment\tName\tStart date\tManager\n1001\tOperations\tSara Op\t2024-01-02\tX\n1002\tAudit\tBilal Audit\t2023-05-06\tY';
+  const xls = 'Employee ID\tDepartment\tName\tStart date\tManager\n1001\tOperations\tSara Op\t2024-01-02\tX\n1002\tAudit\tBilal Audit\t2023-05-06\tY\n1003\toperators\tOmar Op\t2023-05-06\tY';
   const r2 = await http('POST', '/api/admin/employees/import', { csv: xls });
-  assert.equal(r2.json.added, 2, r2.text);
-  assert.deepEqual(db.listEmployees().find(e => e.name === 'Sara Op').groups, ['ops']);
+  assert.equal(r2.json.added, 3, r2.text);
+  assert.deepEqual(db.listEmployees().find(e => e.name === 'Omar Op').groups, ['ops']);
+  assert.deepEqual(db.listEmployees().find(e => e.name === 'Sara Op').groups, ['staff']);
   assert.equal(db.listEmployees().find(e => e.name === 'Bilal Audit').department, 'Audit');
 });
 

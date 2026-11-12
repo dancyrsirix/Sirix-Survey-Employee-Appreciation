@@ -167,7 +167,7 @@
         h('tbody', null, rows)))),
       h('div', { class: 'card' },
         h('h2', null, 'Import employees from a list'),
-        h('p', { class: 'muted small' }, 'Paste a table with a header row, columns in any order. A directory export (Display name or First name + Last name, Job Title, Department, Email) is recognised automatically: people whose department is Operators / Operations go to the operations survey, everyone else to the office staff and management survey. You can also use the simple format Name, Department, Role, Email, Survey where Survey is "staff", "ops" or "staff+ops". Extra columns such as Office Location are ignored. Afterwards you can edit anyone individually, for instance to put a manager in both surveys.'),
+        h('p', { class: 'muted small' }, 'Paste a table with a header row, columns in any order. A directory export (Display name or First name + Last name, Job Title, Department, Email) is recognised automatically: people whose department is "Operators" go to the operations survey, everyone else (including "Operation") to the office staff and management survey. You can also use the simple format Name, Department, Role, Email, Survey where Survey is "staff", "ops" or "staff+ops". Extra columns such as Office Location are ignored. Afterwards you can edit anyone individually, for instance to put a manager in both surveys.'),
         csv,
         h('label', { class: 'small', style: 'font-weight:400' }, replace, ' Replace the whole list (removes current employees and all responses)'),
         h('div', { class: 'actions' }, h('button', { onclick: async () => {

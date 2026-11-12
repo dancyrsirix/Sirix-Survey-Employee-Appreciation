@@ -257,7 +257,7 @@ route('POST', /^\/api\/admin\/employees\/import$/, admin(async (req, res) => {
   //  - Simple list: Name, Department, Role, Email, Survey   (Survey = staff, ops or staff+ops; header row optional)
   //  - Directory export (Microsoft 365 / Entra / Excel): any column order, matched by header name: "Display name"
   //    (or "First name" + "Last name"), "Department", "Job Title", "...Email...", optional "Survey". When there is no
-  //    Survey column, the department decides: Operators / Operations -> ops, everything else -> staff.
+  //    Survey column, the department decides: "Operators" -> ops, everything else (including "Operation") -> staff.
   const body = await readJson(req);
   const rows = parseCsv(String(body.csv || ''));
   const validGroups = new Set(db.listGroups().map(g => g.id));
@@ -295,7 +295,8 @@ route('POST', /^\/api\/admin\/employees\/import$/, admin(async (req, res) => {
   json(res, 200, { added, errors });
 }));
 function isOperationsDepartment(department) {
-  return /^\s*op[ée]rat/i.test(department || '');
+  // Only the "Operators" department (the monitoring operators) takes the ops survey; "Operation(s)" is office staff.
+  return /^\s*operators\b/i.test(department || '');
 }
 route('PUT', /^\/api\/admin\/employees\/([a-f0-9-]+)$/, admin(async (req, res, m) => {
   const body = await readJson(req);
