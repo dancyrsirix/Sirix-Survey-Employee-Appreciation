@@ -1,0 +1,15 @@
+{
+  "name": "sirix-employee-appreciation-survey",
+  "version": "1.0.0",
+  "description": "Anonymous peer appreciation survey with per-employee access codes and an admin results dashboard.",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test tests/*.test.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "license": "UNLICENSED"
+}
