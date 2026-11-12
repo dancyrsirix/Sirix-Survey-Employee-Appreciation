@@ -264,7 +264,9 @@ route('POST', /^\/api\/admin\/employees\/import$/, admin(async (req, res) => {
   let added = 0; const errors = [];
   const header = rows.length ? rows[0].map(c => (c || '').trim().toLowerCase()) : [];
   const col = (...names) => header.findIndex(hd => names.some(n => hd === n || hd.includes(n)));
-  const mapped = header.some(hd => hd.includes('display name') || hd.includes('job title') || hd.includes('first name') || hd.includes('email'));
+  // Header-mapped mode whenever the first row names the columns (a Department column plus any name/email column).
+  const mapped = header.some(hd => hd.includes('display name') || hd.includes('job title') || hd.includes('first name') || hd.includes('email'))
+    || (header.includes('department') && header.some(hd => hd.includes('name')));
   const start = mapped || /^name$/.test(header[0] || '') ? 1 : 0;
   const idx = mapped ? {
     display: col('display name', 'full name', 'name'), first: col('first name', 'given name'), last: col('last name', 'surname', 'family name'),
