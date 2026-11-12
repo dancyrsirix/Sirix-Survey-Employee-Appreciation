@@ -1,0 +1,22 @@
+# systemd unit for the Sirix survey app on this cPanel/CloudLinux server.
+# Install (as root):  cp deploy/cpanel/sirix-survey.service /etc/systemd/system/
+#                      systemctl daemon-reload && systemctl enable --now sirix-survey
+[Unit]
+Description=Sirix employee appreciation survey (Node.js)
+After=network.target
+
+[Service]
+Type=simple
+User=sirixmonitoring
+Group=sirixmonitoring
+WorkingDirectory=/home/sirixmonitoring/sondage
+Environment=NODE_ENV=production
+Environment=PORT=3100
+Environment=DATA_DIR=/home/sirixmonitoring/sondage-data
+Environment=ALLOW_RESTART=1
+ExecStart=/home/sirixmonitoring/.local/node/bin/node server.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

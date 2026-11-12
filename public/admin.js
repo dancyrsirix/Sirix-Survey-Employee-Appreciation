@@ -6,6 +6,7 @@
   let resultsDept = '';    // department filter
   let expanded = new Set();
   let resultsCache = {};
+  let mailPoll = null;     // timer polling the mailing progress
 
   function h(tag, attrs, ...children) {
     const el = document.createElement(tag);
@@ -61,12 +62,13 @@
 
   // ---------- layout ----------
   function render() {
-    const tabs = [['results', 'Results'], ['reports', 'Individual reports'], ['employees', 'Employees & links'], ['questions', 'Surveys & questions'], ['settings', 'Settings & demo data']];
+    const tabs = [['results', 'Results'], ['reports', 'Individual reports'], ['employees', 'Employees & links'], ['email', 'Email'], ['questions', 'Surveys & questions'], ['settings', 'Settings & demo data']];
+    stopMailPoll();
     app.replaceChildren(
       h('div', { class: 'tabs' }, tabs.map(([id, label]) => h('button', { class: id === tab ? 'active' : '', onclick: () => { tab = id; render(); } }, label))),
       h('div', { id: 'tab' }, h('p', { class: 'muted' }, 'Loading...')),
     );
-    ({ results: renderResults, reports: renderReports, employees: renderEmployees, questions: renderQuestions, settings: renderSettings })[tab]();
+    ({ results: renderResults, reports: renderReports, employees: renderEmployees, email: renderEmail, questions: renderQuestions, settings: renderSettings })[tab]();
   }
   const setTab = (...nodes) => document.getElementById('tab').replaceChildren(...nodes);
 
@@ -142,28 +144,30 @@
       h('td', null, e.department),
       h('td', null, e.groups.map(g => h('span', { class: 'pill todo', style: 'margin-right:4px', title: groupName(g) }, groupShort(g)))),
       h('td', null, h('span', { class: 'pill ' + (e.started ? 'done' : 'hidden') }, e.started ? 'started' : 'not yet')),
+      h('td', null, e.inviteSentAt ? h('span', { class: 'pill done', title: 'Personal link emailed ' + fmtDate(e.inviteSentAt) }, 'link sent') : h('span', { class: 'pill hidden' }, e.email ? 'not sent' : 'no email'), e.reportSentAt ? [' ', h('span', { class: 'pill released', title: 'Report notice emailed ' + fmtDate(e.reportSentAt) }, 'report sent')] : null),
       h('td', null, h('code', null, e.code), ' ', h('button', { class: 'link small', onclick: () => { navigator.clipboard.writeText(`${ov.baseUrl}/s/${e.code.replace('-', '')}`); toast('Link copied'); } }, 'copy link')),
       h('td', null, h('div', { class: 'row', style: 'gap:6px' },
+        e.email ? h('button', { class: 'secondary small', style: 'padding:4px 8px', title: 'Email the personal link to this person', onclick: async () => { if (!confirm(`Email the personal link to ${e.name} (${e.email})?`)) return; try { await api('POST', '/api/admin/mail/send', { kind: 'invite', filter: 'ids', ids: [e.id] }); toast('Sending to ' + e.email); setTimeout(async () => { await loadOverview(); if (tab === 'employees') render(); }, 2500); } catch (ex) { toast(ex.message, 'error'); } } }, 'Email link') : null,
         h('button', { class: 'secondary small', style: 'padding:4px 8px', onclick: () => editEmployee(e) }, 'Edit'),
         h('button', { class: 'secondary small', style: 'padding:4px 8px', onclick: async () => { if (!confirm(`Generate a new code for ${e.name}? The old link will stop working.`)) return; await api('POST', `/api/admin/employees/${e.id}/regenerate`); await loadOverview(); render(); } }, 'New code'),
         h('button', { class: 'danger small', style: 'padding:4px 8px', onclick: async () => { if (!confirm(`Remove ${e.name}?`)) return; await api('DELETE', `/api/admin/employees/${e.id}`); await loadOverview(); resultsCache = {}; render(); } }, 'Remove'),
       )),
     ));
-    const csv = h('textarea', { placeholder: 'Name, Department, Role, Email, Survey\nJane Doe, Sales, Account Executive, jane@example.com, staff\nJohn Smith, Operations, Operator, john@example.com, ops\nYannick, Operations, Operations Manager, yannick@example.com, staff+ops', style: 'min-height:120px;font-family:ui-monospace,monospace;font-size:13px' });
+    const csv = h('textarea', { placeholder: 'Paste rows copied from Excel or from the Microsoft 365 user list (with the header row), e.g.\nDisplay name\tFirst name\tLast name\tOffice Location\tJob Title\tDepartment\tProfessional Email address\nJane Doe\tJane\tDoe\tLahore\tLead Designer\tMarketing\tjdoe@example.com\n\nor the simple format: Name, Department, Role, Email, Survey', style: 'min-height:140px;font-family:ui-monospace,monospace;font-size:13px' });
     const replace = h('input', { type: 'checkbox' });
     setTab(
       h('div', { class: 'card' },
         h('h2', null, 'Sharing the survey'),
         h('p', null, 'Every employee has a personal access code. Send each person their own link (or the general link plus their code). The code only prevents double evaluations; it is never attached to the answers.'),
         h('p', null, 'General link: ', h('code', null, ov.baseUrl + '/'), ' · Personal link format: ', h('code', null, ov.baseUrl + '/s/CODE')),
-        h('div', { class: 'actions' }, h('a', { class: 'btn', href: '/api/admin/links.csv', style: 'text-decoration:none' }, 'Download all links (CSV for mail merge)'), h('button', { class: 'secondary', onclick: () => editEmployee(null) }, 'Add one employee')),
+        h('div', { class: 'actions' }, h('button', { class: 'accent', onclick: () => { tab = 'email'; render(); } }, 'Email the personal links to everyone'), h('a', { class: 'btn', href: '/api/admin/links.csv', style: 'text-decoration:none;background:#fff;color:#1a1a1a' }, 'Download all links (CSV)'), h('button', { class: 'secondary', onclick: () => editEmployee(null) }, 'Add one employee')),
       ),
       h('div', { class: 'card' }, h('h2', null, `Employees (${ov.employees.length})`), h('div', { class: 'table-wrap' }, h('table', null,
-        h('thead', null, h('tr', null, h('th', null, 'Name'), h('th', null, 'Department'), h('th', null, 'Surveys'), h('th', null, 'Participation'), h('th', null, 'Code'), h('th', null, ''))),
+        h('thead', null, h('tr', null, h('th', null, 'Name'), h('th', null, 'Department'), h('th', null, 'Surveys'), h('th', null, 'Participation'), h('th', null, 'Emailed'), h('th', null, 'Code'), h('th', null, ''))),
         h('tbody', null, rows)))),
       h('div', { class: 'card' },
         h('h2', null, 'Import employees from a list'),
-        h('p', { class: 'muted small' }, 'Paste one employee per line: Name, Department, Role, Email, Survey. Survey is "staff" (non-operator survey), "ops" (operations survey) or "staff+ops" (both). Copying columns straight from Excel works too.'),
+        h('p', { class: 'muted small' }, 'Paste a table with a header row, columns in any order. A directory export (Display name or First name + Last name, Job Title, Department, Email) is recognised automatically: people whose department is Operators / Operations go to the operations survey, everyone else to the office staff and management survey. You can also use the simple format Name, Department, Role, Email, Survey where Survey is "staff", "ops" or "staff+ops". Extra columns such as Office Location are ignored. Afterwards you can edit anyone individually, for instance to put a manager in both surveys.'),
         csv,
         h('label', { class: 'small', style: 'font-weight:400' }, replace, ' Replace the whole list (removes current employees and all responses)'),
         h('div', { class: 'actions' }, h('button', { onclick: async () => {
@@ -209,7 +213,7 @@
       const qs = g.questions.map(q => ({ ...q }));
       const draw = () => list.replaceChildren(...qs.map((q, i) => h('div', { class: 'qrow' },
         h('span', { class: 'muted small', style: 'width:22px' }, i + 1),
-        h('input', { type: 'text', class: 'cat', placeholder: 'Category (e.g. Fiabilité et suivis)', value: q.category || '', oninput: (e) => { q.category = e.target.value; } }),
+        h('input', { type: 'text', class: 'cat', placeholder: 'Category (e.g. Reliability and follow-up)', value: q.category || '', oninput: (e) => { q.category = e.target.value; } }),
         h('input', { type: 'text', class: 'txt', placeholder: 'Statement', value: q.text, oninput: (e) => { q.text = e.target.value; } }),
         h('select', { onchange: (e) => { q.type = e.target.value; } }, h('option', { value: 'rating', selected: q.type === 'rating' }, 'Rating 1-5'), h('option', { value: 'text', selected: q.type === 'text' }, 'Free text')),
         h('button', { class: 'secondary', title: 'Move up', disabled: i === 0, onclick: () => { [qs[i - 1], qs[i]] = [qs[i], qs[i - 1]]; draw(); } }, '↑'),
@@ -247,10 +251,11 @@
       h('ol', { class: 'small' },
         h('li', null, 'When the evaluation period is over, close the survey (nobody can submit anymore). Review the comments below before releasing: they are shown to the person as written.'),
         h('li', null, h('b', null, 'Release the reports.'), ' Each employee then sees their own report (and nobody else’s) when they open their personal link, the same link they used to fill out the survey.'),
-        h('li', null, 'Tell everyone the reports are available: download the links CSV in "Employees & links" and send a mail merge saying "Ton rapport est disponible sur ton lien personnel". Or print the reports to PDF below and email them one by one.')),
+        h('li', null, 'Tell everyone the reports are available: the "Email" tab sends the notice to everyone who has a report. Or print the reports to PDF below and email them one by one.')),
       h('div', { class: 'actions' },
         g.status === 'open' ? h('button', { class: 'secondary', onclick: () => { if (confirm('Close the survey? Employees will no longer be able to submit.')) setStatus('closed'); } }, 'Close the survey') : null,
         g.status !== 'released' ? h('button', { class: 'accent', onclick: () => { if (confirm('Release the reports? Every employee with enough evaluations will be able to see their own report on their personal link.')) setStatus('released'); } }, 'Release reports to employees') : h('button', { class: 'secondary', onclick: () => setStatus('closed') }, 'Hide reports again'),
+        g.status === 'released' ? h('button', { onclick: () => { tab = 'email'; render(); } }, 'Email employees that their report is ready') : null,
         h('a', { class: 'btn', href: `/admin/reports?group=${g.id}`, target: '_blank', style: 'text-decoration:none' }, 'Open all reports (print / PDF)'),
         h('a', { class: 'btn', href: '/api/admin/links.csv', style: 'text-decoration:none;background:#fff;color:#1a1a1a' }, 'Download links CSV')));
     const controls = h('div', { class: 'row' },
@@ -295,6 +300,9 @@
         h('div', { class: 'actions' }, demoBtn('Load sample employees and demo responses', 'all'), demoBtn('Load sample employees only (no responses)', 'employees'), demoBtn('Regenerate demo responses for current employees', 'responses'))),
       h('div', { class: 'card' }, h('h2', null, 'Reset'),
         h('div', { class: 'actions' }, resetBtn('Delete all responses (keep employees)', 'responses'), resetBtn('Delete everything (employees and responses)', 'all'))),
+      h('div', { class: 'card' }, h('h2', null, 'Maintenance'),
+        h('p', { class: 'muted small' }, 'After updating the code on the server (git pull), restart the app to load it. The service comes back by itself within a few seconds.'),
+        h('div', { class: 'actions' }, h('button', { class: 'secondary', onclick: async () => { if (!confirm('Restart the app now? It will be unavailable for a few seconds.')) return; try { await api('POST', '/api/admin/restart'); toast('Restarting... reload this page in a few seconds'); } catch (ex) { toast(ex.message, 'error'); } } }, 'Restart the app'))),
       h('div', { class: 'card' }, h('h2', null, 'How anonymity works'),
         h('ul', { class: 'small' },
           h('li', null, 'Each evaluation is stored with only the survey, the colleague being evaluated and the answers. No evaluator, no timestamp, no IP address.'),
@@ -302,6 +310,109 @@
           h('li', null, 'Written comments are shown in random order, and results stay hidden until the minimum number of evaluations is reached.'),
           h('li', null, 'The admin only sees whether someone has participated, never whom they evaluated.'))),
     );
+  }
+
+  // ---------- email ----------
+  function stopMailPoll() { if (mailPoll) { clearInterval(mailPoll); mailPoll = null; } }
+  function fmtDate(iso) { return iso ? new Date(iso).toLocaleString() : ''; }
+  function drawJob(el, j) {
+    if (!j || !j.startedAt) return el.replaceChildren();
+    const done = j.sent + j.failed.length;
+    const pct = j.total ? Math.round(done / j.total * 100) : 0;
+    el.replaceChildren(
+      h('h3', null, j.running ? `Sending... ${done} of ${j.total}` : 'Last mailing'),
+      h('p', { class: 'small' }, `${j.kind === 'invite' ? 'Personal links' : 'Report notices'} · started ${fmtDate(j.startedAt)}${j.finishedAt ? ', finished ' + fmtDate(j.finishedAt) : ''} · `,
+        h('b', null, `${j.sent} sent`), j.failed.length ? [', ', h('b', { style: 'color:var(--bad)' }, `${j.failed.length} failed`)] : null, ` of ${j.total}`),
+      h('div', { class: 'progress' }, h('div', { style: `width:${pct}%` })),
+      j.failed.length ? h('div', { class: 'table-wrap' }, h('table', null,
+        h('thead', null, h('tr', null, h('th', null, 'Person'), h('th', null, 'Email'), h('th', null, 'Error'))),
+        h('tbody', null, j.failed.map(f => h('tr', null, h('td', null, f.name), h('td', { class: 'small' }, f.email), h('td', { class: 'small' }, f.error)))))) : null);
+  }
+  function watchJob(el) {
+    stopMailPoll();
+    const tick = async () => {
+      if (tab !== 'email' || !document.body.contains(el)) return stopMailPoll();
+      try {
+        const j = await api('GET', '/api/admin/mail/status');
+        drawJob(el, j);
+        if (!j.running) { stopMailPoll(); await loadOverview(); renderEmail(); }
+      } catch { stopMailPoll(); }
+    };
+    mailPoll = setInterval(tick, 1500);
+    tick();
+  }
+  async function renderEmail() {
+    stopMailPoll();
+    const m = await api('GET', '/api/admin/mail');
+    const s = m.settings, c = m.counts;
+    const field = (label, input, help) => [h('label', null, label), input, help ? h('p', { class: 'muted small', style: 'margin:2px 0 8px' }, help) : null];
+    const progress = h('div');
+
+    // --- sending ---
+    const inviteFilter = h('select', null,
+      h('option', { value: 'unsent' }, `People not emailed yet (${c.invite.unsent})`),
+      h('option', { value: 'all' }, `Everyone with an email address (${c.invite.all})`),
+      h('option', { value: 'notstarted' }, `Reminder: people who have not started (${c.invite.notstarted})`));
+    const reportFilter = h('select', null,
+      h('option', { value: 'unsent' }, `People not notified yet (${c.report.unsent})`),
+      h('option', { value: 'all' }, `Everyone who has a report (${c.report.all})`));
+    const startSend = async (kind, filter) => {
+      const n = c[kind][filter];
+      if (!n) return toast('Nobody to send to with this selection.', 'error');
+      if (!confirm(`Send the ${kind === 'invite' ? 'personal link' : 'report notice'} email to ${n} ${n > 1 ? 'people' : 'person'} now?`)) return;
+      try { await api('POST', '/api/admin/mail/send', { kind, filter }); watchJob(progress); } catch (ex) { alert(ex.message); }
+    };
+    const sendCard = h('div', { class: 'card' }, h('h2', null, 'Send emails to employees'),
+      h('p', { class: 'muted small' }, `${m.withEmail} of ${m.employees} employees have an email address (edit them in "Employees & links"). Emails go out one by one; you can follow the progress here, and sending continues even if you leave this page. The "Emailed" column in "Employees & links" shows who received what.`),
+      !s.configured ? h('div', { class: 'alert error' }, 'Fill in the mail server settings below first, then send yourself a test email.') : null,
+      h('h3', null, '1. Personal links (survey invitation)'),
+      h('div', { class: 'row' }, inviteFilter, h('button', { disabled: !s.configured, onclick: () => startSend('invite', inviteFilter.value) }, 'Send personal links')),
+      h('h3', null, '2. Report notices (after releasing the reports)'),
+      c.report.blocked ? h('p', { class: 'muted small' }, c.report.blocked) : h('p', { class: 'muted small' }, 'Only people who have a report (enough evaluations, survey released) are emailed.'),
+      h('div', { class: 'row' }, reportFilter, h('button', { disabled: !s.configured || !!c.report.blocked, onclick: () => startSend('report', reportFilter.value) }, 'Send report notices')),
+      progress);
+
+    // --- mail server ---
+    const dis = s.envLocked;
+    const host = h('input', { type: 'text', value: s.host, placeholder: 'mail.example.com', disabled: dis });
+    const port = h('input', { type: 'number', min: 1, max: 65535, value: s.port, disabled: dis });
+    const sec = h('select', { disabled: dis }, [['tls', 'SSL/TLS (usually port 465)'], ['starttls', 'STARTTLS (usually port 587)'], ['none', 'None (port 25, trusted local server only)']].map(([v, l]) => h('option', { value: v, selected: s.security === v }, l)));
+    const user = h('input', { type: 'text', value: s.user, autocomplete: 'off', disabled: dis });
+    const pass = h('input', { type: 'password', autocomplete: 'new-password', placeholder: s.hasPassword ? 'saved — leave empty to keep' : '', disabled: dis });
+    const from = h('input', { type: 'email', value: s.from, placeholder: 'survey@example.com', disabled: dis });
+    const fromName = h('input', { type: 'text', value: s.fromName, disabled: dis });
+    const replyTo = h('input', { type: 'email', value: s.replyTo, placeholder: 'hr@example.com', disabled: dis });
+    const verify = h('input', { type: 'checkbox', checked: s.verifyTls, disabled: dis });
+    const testTo = h('input', { type: 'email', placeholder: 'your@email.com' });
+    const settingsCard = h('div', { class: 'card' }, h('h2', null, 'Mail server (SMTP)'),
+      dis ? h('div', { class: 'alert info' }, 'These settings come from the SMTP_* environment variables of the server and cannot be edited here.') : null,
+      h('p', { class: 'muted small' }, 'Any SMTP mailbox works: one on your web host (cPanel), Microsoft 365, Google Workspace... Use a From address on a domain whose SPF and DKIM records allow this server to send, otherwise the messages land in spam.'),
+      h('div', { class: 'row' }, h('div', null, ...field('Server (host name)', host)), h('div', null, ...field('Port', port)), h('div', null, ...field('Security', sec))),
+      h('div', { class: 'row' }, h('div', null, ...field('Username', user)), h('div', null, ...field('Password', pass))),
+      h('div', { class: 'row' }, h('div', null, ...field('From address', from)), h('div', null, ...field('From name', fromName)), h('div', null, ...field('Reply-To (optional)', replyTo, 'Where replies and questions go, e.g. HR.'))),
+      h('label', { class: 'small', style: 'font-weight:400' }, verify, ' Verify the server certificate (untick only if the host name does not match its certificate)'),
+      h('div', { class: 'actions' },
+        dis ? null : h('button', { onclick: async () => { try { await api('PUT', '/api/admin/mail/settings', { host: host.value, port: port.value, security: sec.value, user: user.value, password: pass.value, from: from.value, fromName: fromName.value, replyTo: replyTo.value, verifyTls: verify.checked }); toast('Mail settings saved'); renderEmail(); } catch (ex) { toast(ex.message, 'error'); } } }, 'Save mail settings'),
+        h('div', { class: 'row', style: 'flex:1 1 320px' }, testTo, h('button', { class: 'secondary', onclick: async (ev) => { const b = ev.currentTarget; b.disabled = true; try { await api('POST', '/api/admin/mail/test', { to: testTo.value }); toast('Test email sent to ' + testTo.value); } catch (ex) { alert('Sending failed:\n' + ex.message); } b.disabled = false; } }, 'Send a test email'))));
+
+    // --- templates ---
+    const tplCards = ['invite', 'report'].map(kind => {
+      const t = m.templates[kind];
+      const subj = h('input', { type: 'text', value: t.subject });
+      const body = h('textarea', { style: 'min-height:230px;font-family:inherit' }, t.body);
+      return h('div', { class: 'card' },
+        h('h2', null, kind === 'invite' ? 'Email 1: personal link (survey invitation)' : 'Email 2: report available'),
+        h('p', { class: 'muted small' }, 'Placeholders: ', m.placeholders.map(x => h('code', { style: 'margin-right:6px' }, x)), ' · {first_name} is the first word of the name · {link} is required. Employees receive a Sirix-style HTML email built from this text (the line with {link} becomes a button, the line with {code} a highlighted box, lines starting with "- " a list), plus a plain-text copy.'),
+        ...field('Subject', subj), ...field('Message (plain text)', body),
+        h('div', { class: 'actions' },
+          h('button', { onclick: async () => { try { await api('PUT', '/api/admin/mail/templates', { [kind]: { subject: subj.value, body: body.value } }); toast('Template saved'); } catch (ex) { toast(ex.message, 'error'); } } }, 'Save template'),
+          h('a', { class: 'btn', href: `/api/admin/mail/preview/${kind}`, target: '_blank', style: 'text-decoration:none;background:#fff;color:#1a1a1a', title: 'Shows the saved template as a Sirix-style HTML email' }, 'Preview the email'),
+          h('button', { class: 'secondary', onclick: () => { subj.value = m.defaults[kind].subject; body.value = m.defaults[kind].body; } }, 'Reset to the default text')));
+    });
+
+    setTab(sendCard, settingsCard, ...tplCards);
+    drawJob(progress, m.job);
+    if (m.job.running) watchJob(progress);
   }
 
   // ---------- boot ----------

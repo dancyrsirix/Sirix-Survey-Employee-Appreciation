@@ -1,25 +1,25 @@
 <!doctype html>
-<html lang="fr">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sondage d’appréciation du travail</title>
+<title>Work Appreciation Survey</title>
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
 <header class="top"><div class="wrap">
-  <div><div class="logo">Sirix</div><div class="tagline">Toujours présents. Constamment vigilants.</div></div>
-  <div class="sub">Sondage interne<br>100 % anonyme</div>
+  <div><div class="logo">Sirix</div><div class="tagline">Always present. Constantly vigilant.</div></div>
+  <div class="sub">Internal survey<br>100% anonymous</div>
 </div></header>
 <main class="wrap">
   <div class="card login">
-    <h2>Entre ton code d’accès personnel</h2>
-    <p class="muted small">Ton code t’a été envoyé personnellement. Il sert uniquement à s’assurer que chaque collègue est évalué une seule fois par personne. Tes réponses ne sont jamais associées à ton code.</p>
+    <h2>Enter your personal access code</h2>
+    <p class="muted small">Your code was sent to you personally. It is only used to make sure each colleague is evaluated once per person. Your answers are never linked to your code.</p>
     <form id="form">
-      <label for="code">Code d’accès</label>
+      <label for="code">Access code</label>
       <input id="code" type="text" class="code-input" placeholder="XXXXX-XXXXX" autocomplete="off" autocapitalize="characters" spellcheck="false" required>
       <div id="err" class="alert error" style="display:none"></div>
-      <div class="actions"><button type="submit">Commencer</button></div>
+      <div class="actions"><button type="submit">Start</button></div>
     </form>
   </div>
 </main>
@@ -32,7 +32,7 @@ document.getElementById('form').addEventListener('submit', async (e) => {
   const r = await fetch('/api/survey/' + encodeURIComponent(code));
   if (r.ok) { location.href = '/s/' + code; return; }
   const j = await r.json().catch(() => ({}));
-  err.textContent = j.error || 'Code invalide.';
+  err.textContent = j.error || 'Invalid code.';
   err.style.display = 'block';
 });
 </script>

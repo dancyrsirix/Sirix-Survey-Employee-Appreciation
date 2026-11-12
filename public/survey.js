@@ -21,7 +21,7 @@
     const r = await fetch('/api/survey/' + encodeURIComponent(code));
     const j = await r.json().catch(() => ({}));
     if (!r.ok) {
-      app.replaceChildren(h('div', { class: 'card' }, h('div', { class: 'alert error' }, j.error || 'Code invalide.'), h('a', { href: '/' }, 'Entrer ton code à nouveau')));
+      app.replaceChildren(h('div', { class: 'card' }, h('div', { class: 'alert error' }, j.error || 'Invalid code.'), h('a', { href: '/' }, 'Enter your code again')));
       return;
     }
     data = j;
@@ -39,24 +39,24 @@
     if (view.mode === 'reports') return renderReports();
     const parts = [];
     parts.push(h('div', { class: 'card' },
-      h('h2', null, 'Sondage d’appréciation du travail'),
-      h('p', { class: 'muted' }, `Bonjour ${data.employee.name.split(' ')[0]}. Évalue tes collègues sur leur travail au quotidien : 5 énoncés et un commentaire facultatif par personne, ça prend une minute. Tu ne travailles pas assez avec quelqu’un ? Passe cette personne, ou coche N/A sur les énoncés que tu ne peux pas juger. Tu peux revenir plus tard avec le même code pour continuer.`),
-      h('p', { class: 'muted small' }, 'Aucune réponse n’est associée à son auteur : tes réponses sont enregistrées sans ton nom, sans ton code et sans l’heure. Les résultats sont partagés sous forme de moyennes seulement, et uniquement à partir de quelques évaluations par personne.'),
+      h('h2', null, 'Work Appreciation Survey'),
+      h('p', { class: 'muted' }, `Hi ${data.employee.name.split(' ')[0]}. Evaluate your colleagues on their day-to-day work: 5 statements and an optional comment per person, about a minute each. Don’t work enough with someone? Skip that person, or tick N/A on the statements you can’t judge. You can come back later with the same code to continue.`),
+      h('p', { class: 'muted small' }, 'No answer is linked to its author: your answers are saved without your name, your code or the time. Results are shared as averages only, and only once a person has received a few evaluations.'),
     ));
     if (reports && reports.reports.length) {
       parts.push(h('div', { class: 'card' },
-        h('h2', null, 'Ton rapport est disponible'),
-        h('p', { class: 'muted small' }, 'Les résultats du sondage ont été partagés. Consulte le rapport qui te concerne pour voir tes points forts et ce que tu peux travailler.'),
-        h('div', { class: 'actions' }, h('button', { class: 'accent', onclick: () => { view = { mode: 'reports' }; render(); } }, 'Voir mon rapport'))));
+        h('h2', null, 'Your report is available'),
+        h('p', { class: 'muted small' }, 'The survey results have been shared. Open your personal report to see your strengths and what you can work on.'),
+        h('div', { class: 'actions' }, h('button', { class: 'accent', onclick: () => { view = { mode: 'reports' }; render(); } }, 'See my report'))));
     }
     for (const g of data.groups) {
       const done = g.targets.filter(t => t.done).length;
       const open = g.status === 'open';
       const card = h('div', { class: 'card' },
-        h('h2', null, g.name, ' ', !open ? h('span', { class: 'pill closed' }, 'fermé') : null),
+        h('h2', null, g.name, ' ', !open ? h('span', { class: 'pill closed' }, 'closed') : null),
         g.description ? h('p', { class: 'muted small' }, g.description) : null,
         h('div', { class: 'progress' }, h('div', { style: `width:${g.targets.length ? (100 * done / g.targets.length) : 0}%` })),
-        h('p', { class: 'small muted' }, `${done} de ${g.targets.length} collègues évalués. Tu n’es pas obligé(e) d’évaluer tout le monde.`),
+        h('p', { class: 'small muted' }, `${done} of ${g.targets.length} colleagues evaluated. You don’t have to evaluate everyone.`),
       );
       const byDept = {};
       for (const t of g.targets) (byDept[t.department] ||= []).push(t);
@@ -66,17 +66,17 @@
           h('button', { class: 'person' + (t.done ? ' done' : ''), type: 'button', disabled: t.done || !open,
               onclick: () => { if (!t.done && open) { view = { mode: 'form', groupId: g.id, targetId: t.id }; render(); } } },
             h('div', null, h('div', { class: 'name' }, t.name), h('div', { class: 'role' }, t.role || '')),
-            h('span', { class: 'pill ' + (t.done ? 'done' : 'todo') }, t.done ? 'Fait' : 'Évaluer'))
+            h('span', { class: 'pill ' + (t.done ? 'done' : 'todo') }, t.done ? 'Done' : 'Evaluate'))
         )));
       }
       parts.push(card);
     }
-    if (!data.groups.length) parts.push(h('div', { class: 'card' }, h('p', null, 'Tu ne fais partie d’aucun sondage ouvert pour le moment.')));
+    if (!data.groups.length) parts.push(h('div', { class: 'card' }, h('p', null, 'You are not part of any open survey at the moment.')));
     app.replaceChildren(...parts);
   }
 
   function legend() {
-    const items = [['1', 'Pas du tout d’accord'], ['2', 'Plutôt pas d’accord'], ['3', 'Neutre'], ['4', 'Plutôt d’accord'], ['5', 'Tout à fait d’accord'], ['N/A', 'Je ne peux pas évaluer']];
+    const items = [['1', 'Strongly disagree'], ['2', 'Somewhat disagree'], ['3', 'Neutral'], ['4', 'Somewhat agree'], ['5', 'Strongly agree'], ['N/A', 'I cannot evaluate']];
     return h('div', { class: 'legend' }, items.map(([v, l]) => h('div', { class: v === 'N/A' ? 'na' : '' }, h('b', null, v), h('br'), l)));
   }
 
@@ -95,41 +95,41 @@
       rows.push(h('tr', null,
         h('td', { class: 'num' }, i + 1),
         h('td', { class: 'left' }, q.text),
-        [1, 2, 3, 4, 5].map(n => h('td', { class: 'opt' }, h('input', { type: 'radio', name, value: n, 'aria-label': `${n} pour l’énoncé ${i + 1}`, onchange: () => { answers[q.id] = n; } }))),
-        h('td', { class: 'opt' }, h('input', { type: 'radio', name, value: 'na', 'aria-label': `N/A pour l’énoncé ${i + 1}`, onchange: () => { delete answers[q.id]; } })),
+        [1, 2, 3, 4, 5].map(n => h('td', { class: 'opt' }, h('input', { type: 'radio', name, value: n, 'aria-label': `${n} for statement ${i + 1}`, onchange: () => { answers[q.id] = n; } }))),
+        h('td', { class: 'opt' }, h('input', { type: 'radio', name, value: 'na', 'aria-label': `N/A for statement ${i + 1}`, onchange: () => { delete answers[q.id]; } })),
       ));
     });
     const table = h('table', { class: 'form' },
-      h('thead', null, h('tr', null, h('th', { class: 'left' }, '#'), h('th', { class: 'left' }, 'Énoncé'), ['1', '2', '3', '4', '5', 'N/A'].map(x => h('th', null, x)))),
+      h('thead', null, h('tr', null, h('th', { class: 'left' }, '#'), h('th', { class: 'left' }, 'Statement'), ['1', '2', '3', '4', '5', 'N/A'].map(x => h('th', null, x)))),
       h('tbody', null, rows));
 
     const submit = h('button', { type: 'button', onclick: async () => {
       const unanswered = ratingQs.filter((q, i) => !document.querySelector(`input[name=q${i}]:checked`)).length;
-      if (unanswered && !confirm(`${unanswered} énoncé(s) sans réponse seront considérés comme N/A. Envoyer quand même ?`)) return;
+      if (unanswered && !confirm(`${unanswered} unanswered statement(s) will count as N/A. Submit anyway?`)) return;
       submit.disabled = true; err.style.display = 'none';
       const r = await fetch('/api/survey/' + encodeURIComponent(code) + '/submit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ group_id: g.id, target_id: t.id, answers }) });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) { err.textContent = j.error || 'Une erreur est survenue.'; err.style.display = 'block'; submit.disabled = false; return; }
+      if (!r.ok) { err.textContent = j.error || 'Something went wrong.'; err.style.display = 'block'; submit.disabled = false; return; }
       t.done = true; view = { mode: 'list' }; render();
-    } }, 'Envoyer l’évaluation');
+    } }, 'Submit evaluation');
 
     app.replaceChildren(h('div', { class: 'card' },
-      h('button', { class: 'link', type: 'button', onclick: () => { view = { mode: 'list' }; render(); } }, '← Retour à la liste (rien ne sera enregistré)'),
-      h('h2', { style: 'margin-top:12px' }, 'Sondage d’appréciation du travail'),
-      h('p', { class: 'muted small' }, 'Évalue ton collègue sur son travail au quotidien. Aucune réponse n’est associée à son auteur. Tu ne travailles pas assez avec cette personne ? Coche ', h('b', null, 'N/A'), '.'),
-      h('p', null, h('b', null, 'Personne évaluée : '), t.name, h('span', { class: 'muted small' }, ' · ', [t.role, t.department].filter(Boolean).join(' · '))),
+      h('button', { class: 'link', type: 'button', onclick: () => { view = { mode: 'list' }; render(); } }, '← Back to the list (nothing will be saved)'),
+      h('h2', { style: 'margin-top:12px' }, 'Work Appreciation Survey'),
+      h('p', { class: 'muted small' }, 'Evaluate your colleague on their day-to-day work. No answer is linked to its author. Don’t work enough with this person? Tick ', h('b', null, 'N/A'), '.'),
+      h('p', null, h('b', null, 'Person evaluated: '), t.name, h('span', { class: 'muted small' }, ' · ', [t.role, t.department].filter(Boolean).join(' · '))),
       legend(),
       h('div', { class: 'table-wrap' }, table),
-      textQs.map(q => [h('label', null, q.text, ' ', h('span', { class: 'muted', style: 'font-weight:400' }, '(facultatif)')), h('textarea', { placeholder: 'Un conseil concret que cette personne pourra appliquer', oninput: (e) => { answers[q.id] = e.target.value; } })]),
+      textQs.map(q => [h('label', null, q.text, ' ', h('span', { class: 'muted', style: 'font-weight:400' }, '(optional)')), h('textarea', { placeholder: 'One concrete piece of advice this person can act on', oninput: (e) => { answers[q.id] = e.target.value; } })]),
       err,
-      h('div', { class: 'actions' }, submit, h('button', { type: 'button', class: 'secondary', onclick: () => { view = { mode: 'list' }; render(); } }, 'Annuler')),
-      h('p', { class: 'muted small', style: 'margin-top:14px' }, 'Une fois envoyée, l’évaluation est définitive. Merci de ta participation. Les résultats seront partagés sous forme de moyennes seulement.'),
+      h('div', { class: 'actions' }, submit, h('button', { type: 'button', class: 'secondary', onclick: () => { view = { mode: 'list' }; render(); } }, 'Cancel')),
+      h('p', { class: 'muted small', style: 'margin-top:14px' }, 'Once submitted, the evaluation is final. Thank you for taking part. Results are shared as averages only.'),
     ));
   }
 
   function renderReports() {
     app.replaceChildren(
-      h('div', { class: 'card no-print' }, h('button', { class: 'link', type: 'button', onclick: () => { view = { mode: 'list' }; render(); } }, '← Retour'), ' ', h('button', { class: 'secondary', style: 'margin-left:12px', onclick: () => window.print() }, 'Imprimer / enregistrer en PDF')),
+      h('div', { class: 'card no-print' }, h('button', { class: 'link', type: 'button', onclick: () => { view = { mode: 'list' }; render(); } }, '← Back'), ' ', h('button', { class: 'secondary', style: 'margin-left:12px', onclick: () => window.print() }, 'Print / save as PDF')),
       ...reports.reports.map(r => h('div', { class: 'card' }, window.renderReport(r, { orgName: reports.orgName }))),
     );
   }

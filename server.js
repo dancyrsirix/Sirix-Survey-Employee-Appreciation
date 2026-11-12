@@ -5,6 +5,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const db = require('./lib/db');
 const seed = require('./lib/seed');
+const mail = require('./lib/mail');
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -121,9 +122,9 @@ function route(method, pattern, handler) { routes.push({ method, pattern, handle
 
 // Public: survey access
 route('GET', /^\/api\/survey\/([A-Za-z0-9-]+)$/, (req, res, m) => {
-  if (limited('code:' + clientIp(req), 60, 60_000)) return json(res, 429, { error: 'Trop de tentatives. Attends une minute.' });
+  if (limited('code:' + clientIp(req), 60, 60_000)) return json(res, 429, { error: 'Too many attempts. Wait a minute.' });
   const emp = db.getEmployeeByCode(m[1]);
-  if (!emp) return json(res, 404, { error: 'Ce code d’accès n’est pas valide. Vérifie-le et réessaie.' });
+  if (!emp) return json(res, 404, { error: 'This access code is not valid. Check it and try again.' });
   json(res, 200, {
     employee: { name: emp.name, department: emp.department },
     orgName: db.getSetting('org_name'),
@@ -132,9 +133,9 @@ route('GET', /^\/api\/survey\/([A-Za-z0-9-]+)$/, (req, res, m) => {
   });
 });
 route('POST', /^\/api\/survey\/([A-Za-z0-9-]+)\/submit$/, async (req, res, m) => {
-  if (limited('submit:' + clientIp(req), 120, 60_000)) return json(res, 429, { error: 'Trop de requêtes. Attends une minute.' });
+  if (limited('submit:' + clientIp(req), 120, 60_000)) return json(res, 429, { error: 'Too many requests. Wait a minute.' });
   const emp = db.getEmployeeByCode(m[1]);
-  if (!emp) return json(res, 404, { error: 'Ce code d’accès n’est pas valide.' });
+  if (!emp) return json(res, 404, { error: 'This access code is not valid.' });
   const body = await readJson(req);
   const result = db.submitEvaluation(emp, String(body.group_id || ''), String(body.target_id || ''), body.answers || {});
   if (result.error) return json(res, 400, result);
@@ -142,9 +143,9 @@ route('POST', /^\/api\/survey\/([A-Za-z0-9-]+)\/submit$/, async (req, res, m) =>
 });
 
 route('GET', /^\/api\/survey\/([A-Za-z0-9-]+)\/reports$/, (req, res, m) => {
-  if (limited('code:' + clientIp(req), 60, 60_000)) return json(res, 429, { error: 'Trop de tentatives. Attends une minute.' });
+  if (limited('code:' + clientIp(req), 60, 60_000)) return json(res, 429, { error: 'Too many attempts. Wait a minute.' });
   const emp = db.getEmployeeByCode(m[1]);
-  if (!emp) return json(res, 404, { error: 'Ce code d’accès n’est pas valide.' });
+  if (!emp) return json(res, 404, { error: 'This access code is not valid.' });
   // Only surveys whose results have been released by the admin.
   const reports = emp.groups.map(gid => db.getGroup(gid)).filter(g => g && g.status === 'released').map(g => db.reportFor(g.id, emp.id)).filter(Boolean);
   json(res, 200, { employee: { name: emp.name, department: emp.department }, orgName: db.getSetting('org_name'), reports });
@@ -198,12 +199,13 @@ function admin(handler) {
 
 route('GET', /^\/api\/admin\/overview$/, admin((req, res) => {
   const started = new Map(db.participation().map(p => [p.id, p.started]));
+  const mailed = db.mailStatus();
   json(res, 200, {
     orgName: db.getSetting('org_name'),
     minResponses: parseInt(db.getSetting('min_responses', '3'), 10),
     baseUrl: baseUrl(req),
     groups: db.listGroups().map(g => ({ ...g, questions: db.listQuestions(g.id) })),
-    employees: db.listEmployees().map(e => ({ ...e, code: db.formatCode(e.code), started: !!started.get(e.id) })),
+    employees: db.listEmployees().map(e => ({ ...e, code: db.formatCode(e.code), started: !!started.get(e.id), inviteSentAt: mailed.get(`${e.id}:invite`) || null, reportSentAt: mailed.get(`${e.id}:report`) || null })),
   });
 }));
 route('GET', /^\/api\/admin\/results\/([a-z0-9_-]+)$/, admin((req, res, m) => {
@@ -251,18 +253,38 @@ route('POST', /^\/api\/admin\/employees$/, admin(async (req, res) => {
   json(res, 200, db.createEmployee({ name: String(body.name), department: String(body.department), role: String(body.role || ''), email: String(body.email || ''), groups: Array.isArray(body.groups) ? body.groups : [] }));
 }));
 route('POST', /^\/api\/admin\/employees\/import$/, admin(async (req, res) => {
-  // CSV text: Name, Department, Role, Email, Groups  (Groups like "staff", "ops" or "staff+ops"). Header row optional.
+  // Two formats, detected from the header row:
+  //  - Simple list: Name, Department, Role, Email, Survey   (Survey = staff, ops or staff+ops; header row optional)
+  //  - Directory export (Microsoft 365 / Entra / Excel): any column order, matched by header name: "Display name"
+  //    (or "First name" + "Last name"), "Department", "Job Title", "...Email...", optional "Survey". When there is no
+  //    Survey column, the department decides: Operators / Operations -> ops, everything else -> staff.
   const body = await readJson(req);
   const rows = parseCsv(String(body.csv || ''));
   const validGroups = new Set(db.listGroups().map(g => g.id));
   let added = 0; const errors = [];
-  const start = rows.length && /^name$/i.test(rows[0][0] || '') ? 1 : 0;
+  const header = rows.length ? rows[0].map(c => (c || '').trim().toLowerCase()) : [];
+  const col = (...names) => header.findIndex(hd => names.some(n => hd === n || hd.includes(n)));
+  const mapped = header.some(hd => hd.includes('display name') || hd.includes('job title') || hd.includes('first name') || hd.includes('email'));
+  const start = mapped || /^name$/.test(header[0] || '') ? 1 : 0;
+  const idx = mapped ? {
+    display: col('display name', 'full name', 'name'), first: col('first name', 'given name'), last: col('last name', 'surname', 'family name'),
+    dept: col('department'), role: col('job title', 'title', 'role', 'position'), email: col('email', 'e-mail', 'mail'), survey: col('survey'),
+  } : null;
   if (body.replace) db.resetAll();
   for (let i = start; i < rows.length; i++) {
-    const [name, department, role = '', email = '', groups = 'staff'] = rows[i].map(s => (s || '').trim());
-    if (!name && !department) continue;
+    const cells = rows[i].map(c => (c || '').trim());
+    let name, department, role = '', email = '', groups = 'staff';
+    if (mapped) {
+      const at = j => (j >= 0 ? cells[j] || '' : '');
+      name = (idx.display >= 0 && !/^(first|last) name/.test(header[idx.display]) ? at(idx.display) : '') || [at(idx.first), at(idx.last)].filter(Boolean).join(' ');
+      department = at(idx.dept); role = at(idx.role); email = at(idx.email);
+      groups = at(idx.survey) || (isOperationsDepartment(department) ? 'ops' : 'staff');
+    } else {
+      [name, department, role = '', email = '', groups = 'staff'] = cells;
+    }
+    if (!name && !department && !email) continue;
     if (!name || !department) { errors.push(`Line ${i + 1}: name and department are required.`); continue; }
-    const gs = groups.split(/[+;|/ ]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
+    const gs = groups.split(/[+;|/ ]+/).map(x => x.trim().toLowerCase()).filter(Boolean);
     const bad = gs.filter(g => !validGroups.has(g));
     if (bad.length) { errors.push(`Line ${i + 1}: unknown survey "${bad.join(', ')}" (use staff, ops or staff+ops).`); continue; }
     db.createEmployee({ name, department, role, email, groups: gs, sort: i });
@@ -270,6 +292,9 @@ route('POST', /^\/api\/admin\/employees\/import$/, admin(async (req, res) => {
   }
   json(res, 200, { added, errors });
 }));
+function isOperationsDepartment(department) {
+  return /^\s*op[ée]rat/i.test(department || '');
+}
 route('PUT', /^\/api\/admin\/employees\/([a-f0-9-]+)$/, admin(async (req, res, m) => {
   const body = await readJson(req);
   const e = db.updateEmployee(m[1], body);
@@ -329,6 +354,67 @@ route('POST', /^\/api\/admin\/reset$/, admin(async (req, res) => {
   else if (body.what === 'all') db.resetAll();
   else return json(res, 400, { error: 'Unknown reset action.' });
   json(res, 200, { ok: true });
+}));
+
+// Admin: email (personal links and report notices)
+route('GET', /^\/api\/admin\/mail$/, admin((req, res) => {
+  const counts = {};
+  for (const kind of ['invite', 'report']) {
+    counts[kind] = { all: 0, unsent: 0, notstarted: 0, blocked: null };
+    for (const f of ['all', 'unsent', 'notstarted']) {
+      try { counts[kind][f] = mail.recipients(kind, f).length; } catch (e) { counts[kind].blocked = e.message; }
+    }
+  }
+  const employees = db.listEmployees();
+  json(res, 200, {
+    settings: mail.publicSettings(), templates: mail.templates(), defaults: mail.DEFAULT_TEMPLATES, placeholders: mail.PLACEHOLDERS,
+    counts, job: mail.jobStatus(), employees: employees.length, withEmail: employees.filter(e => mail.isEmail(e.email)).length,
+  });
+}));
+route('PUT', /^\/api\/admin\/mail\/settings$/, admin(async (req, res) => {
+  const body = await readJson(req);
+  try { mail.saveSettings(body); } catch (e) { return json(res, 400, { error: e.message }); }
+  json(res, 200, { ok: true, settings: mail.publicSettings() });
+}));
+route('PUT', /^\/api\/admin\/mail\/templates$/, admin(async (req, res) => {
+  const body = await readJson(req);
+  try { mail.saveTemplates(body); } catch (e) { return json(res, 400, { error: e.message }); }
+  json(res, 200, { ok: true, templates: mail.templates() });
+}));
+route('POST', /^\/api\/admin\/mail\/test$/, admin(async (req, res) => {
+  const body = await readJson(req);
+  const to = String(body.to || '').trim();
+  if (!mail.isEmail(to)) return json(res, 400, { error: 'Enter a valid email address for the test.' });
+  const kind = body.kind === 'report' ? 'report' : 'invite';
+  const sample = { id: 'test', name: 'Jane Doe', email: to, code: 'TESTCODE42' };
+  const tpl = mail.templates()[kind];
+  const vars = mail.varsFor(sample, baseUrl(req));
+  const text = mail.render(tpl.body, vars);
+  try { await mail.sendMail({ to, toName: sample.name, subject: '[TEST] ' + mail.render(tpl.subject, vars), text, html: mail.htmlEmail(kind, text, vars) }); }
+  catch (e) { return json(res, 502, { error: e.message }); }
+  json(res, 200, { ok: true });
+}));
+route('GET', /^\/api\/admin\/mail\/preview\/(invite|report)$/, admin((req, res, m) => {
+  // The HTML email as employees will see it, with sample values.
+  const sample = { id: 'preview', name: 'Jane Doe', email: 'jane@example.com', code: 'TESTCODE42' };
+  const vars = mail.varsFor(sample, baseUrl(req));
+  const tpl = mail.templates()[m[1]];
+  send(res, 200, mail.htmlEmail(m[1], mail.render(tpl.body, vars), vars), { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+}));
+route('POST', /^\/api\/admin\/mail\/send$/, admin(async (req, res) => {
+  const body = await readJson(req);
+  const kind = ['invite', 'report'].includes(body.kind) ? body.kind : null;
+  if (!kind) return json(res, 400, { error: 'Unknown mailing.' });
+  try { json(res, 200, mail.startJob(kind, mail.recipients(kind, body.filter, body.ids), baseUrl(req))); }
+  catch (e) { json(res, 400, { error: e.message }); }
+}));
+route('GET', /^\/api\/admin\/mail\/status$/, admin((req, res) => json(res, 200, mail.jobStatus())));
+
+// Admin: restart the process (systemd restarts it within seconds; useful after a git pull without root access)
+route('POST', /^\/api\/admin\/restart$/, admin((req, res) => {
+  if (!process.env.ALLOW_RESTART) return json(res, 400, { error: 'Restart from the admin is disabled (set ALLOW_RESTART=1 in the service environment to enable it).' });
+  json(res, 200, { ok: true });
+  setTimeout(() => process.exit(0), 300);
 }));
 
 function parseCsv(text) {

@@ -8,11 +8,14 @@ const path = require('node:path');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'survey-test-'));
 process.env.DATA_DIR = tmp;
 process.env.PORT = '0';
+process.env.MAIL_PAUSE_MS = '0';
+delete process.env.SMTP_HOST;
 delete process.env.ADMIN_PASSWORD;
 
 const { server } = require('../server');
 const db = require('../lib/db');
 const seed = require('../lib/seed');
+const mail = require('../lib/mail');
 
 let base, cookie = '';
 const http = async (method, p, body, opts = {}) => {
@@ -103,7 +106,7 @@ test('submit once per colleague, partial answers allowed, empty rejected, self r
   assert.equal(r.status, 200, r.text);
   r = await http('POST', `/api/survey/${alice.code}/submit`, { group_id: 'staff', target_id: bob.id, answers: { [rating.id]: 1 } });
   assert.equal(r.status, 400);
-  assert.match(r.json.error, /déjà/);
+  assert.match(r.json.error, /already/);
   const sv = (await http('GET', `/api/survey/${alice.code}`)).json;
   assert.equal(sv.groups[0].targets.find(t => t.id === bob.id).done, true);
   // operator cannot submit into the staff survey
@@ -152,7 +155,7 @@ test('default question set is 5 categorized statements plus one comment', () => 
   assert.equal(qs.length, 6);
   assert.equal(qs.filter(q => q.type === 'rating').length, 5);
   assert.deepEqual(qs.filter(q => q.type === 'rating').map(q => q.category),
-    ['Fiabilité et suivis', 'Réactivité et communication', 'Disponibilité et collaboration', 'Côté humain', 'Qualité du travail']);
+    ['Reliability and follow-up', 'Responsiveness and communication', 'Availability and collaboration', 'People skills', 'Quality of work']);
   assert.equal(qs[5].type, 'text');
 });
 
@@ -207,7 +210,7 @@ test('closing a survey blocks submissions', async () => {
   assert.equal((await http('PUT', '/api/admin/groups/staff', { status: 'closed' })).status, 200);
   const r = await http('POST', `/api/survey/${a.code}/submit`, { group_id: 'staff', target_id: b.id, answers: { [rating.id]: 5 } });
   assert.equal(r.status, 400);
-  assert.match(r.json.error, /fermé/);
+  assert.match(r.json.error, /closed/);
   await http('PUT', '/api/admin/groups/staff', { status: 'open' });
 });
 
@@ -228,6 +231,29 @@ test('import from pasted CSV and question editing', async () => {
   assert.equal(q.json[0].text, 'Edited first question');
 });
 
+test('import from a Microsoft 365 directory export: header-mapped columns, survey chosen from the department', async () => {
+  const tsv = [
+    'Col\tDisplay name\tFirst name\tLast name\tOffice Location\tJob Title\tDepartment\tProfessional Email address',
+    '\tDaniya Danish\tDaniya\tDanish\tLahore\tLead Content Writer\tMarketing\tddanish@example.com',
+    '',
+    '322\tJannat Mehmood\tJannat\tMehmood\tLahore\tSirix Pro Manager\tOperation\tjmehmood@example.com',
+    '\t\tAli\tKhan\tLahore\tOperator\tOperators\takhan@example.com',
+    '\tNo Dept\tNo\tDept\tLahore\tIntern\t\tnodept@example.com',
+  ].join('\n');
+  const r = await http('POST', '/api/admin/employees/import', { csv: tsv });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.json.added, 3);
+  assert.equal(r.json.errors.length, 1);
+  const emps = db.listEmployees();
+  const d = emps.find(e => e.name === 'Daniya Danish');
+  assert.deepEqual(d.groups, ['staff']);
+  assert.equal(d.role, 'Lead Content Writer');
+  assert.equal(d.email, 'ddanish@example.com');
+  assert.equal(d.department, 'Marketing');
+  assert.deepEqual(emps.find(e => e.name === 'Jannat Mehmood').groups, ['ops']);
+  assert.deepEqual(emps.find(e => e.name === 'Ali Khan').groups, ['ops']);   // name built from First + Last
+});
+
 test('demo responses generate and reset clears them', async () => {
   await http('POST', '/api/admin/demo', { what: 'all' });
   let r = (await http('GET', '/api/admin/results/ops')).json;
@@ -237,6 +263,143 @@ test('demo responses generate and reset clears them', async () => {
   r = (await http('GET', '/api/admin/results/ops')).json;
   assert.equal(r.totalResponses, 0);
   assert.ok(r.people.length > 0);
+});
+
+test('email: settings, templates, sending personal links through a fake transport, logging and failures', async () => {
+  const sent = [];
+  mail.setTransport(async (s, from, to, message) => { sent.push({ s, from, to, message }); });
+  let r = await http('POST', '/api/admin/mail/send', { kind: 'invite', filter: 'all' });
+  assert.equal(r.status, 400);                                   // not configured yet
+  r = await http('PUT', '/api/admin/mail/settings', { host: 'smtp.example.com', port: 465, security: 'tls', user: 'survey@example.com', password: 'secret', from: 'survey@example.com', fromName: 'Sirix Survey', replyTo: 'hr@example.com' });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.json.settings.hasPassword, true);
+  assert.equal(r.json.settings.password, undefined);
+  assert.equal(r.json.settings.configured, true);
+  assert.equal((await http('PUT', '/api/admin/mail/settings', { port: 99999 })).status, 400);
+  r = await http('PUT', '/api/admin/mail/templates', { invite: { subject: 'Subject', body: 'No link here' } });
+  assert.equal(r.status, 400);
+  r = await http('PUT', '/api/admin/mail/templates', { invite: { subject: 'Your link, {first_name} – été', body: 'Hello {name}, here is {link} (code {code}) – {organization}' } });
+  assert.equal(r.status, 200, r.text);
+  // sample employees have no email: give two of them one
+  const emps = db.listEmployees();
+  await http('PUT', `/api/admin/employees/${emps[0].id}`, { email: 'a@example.com' });
+  await http('PUT', `/api/admin/employees/${emps[1].id}`, { email: 'b@example.com' });
+  let info = (await http('GET', '/api/admin/mail')).json;
+  assert.equal(info.withEmail, 2);
+  assert.equal(info.counts.invite.all, 2);
+  assert.equal(info.counts.invite.unsent, 2);
+  assert.ok(info.counts.report.blocked);                         // nothing released
+  r = await http('POST', '/api/admin/mail/send', { kind: 'invite', filter: 'unsent' });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.json.total, 2);
+  const waitJob = async () => { for (let i = 0; i < 100 && (await http('GET', '/api/admin/mail/status')).json.running; i++) await new Promise(res => setTimeout(res, 20)); return (await http('GET', '/api/admin/mail/status')).json; };
+  let st = await waitJob();
+  assert.equal(st.running, false);
+  assert.equal(st.sent, 2);
+  assert.deepEqual(st.failed, []);
+  assert.equal(sent.length, 2);
+  const a = sent.find(x => x.to === 'a@example.com');
+  assert.equal(a.from, 'survey@example.com');
+  assert.match(a.message, /^From: "Sirix Survey" <survey@example.com>\r\n/);
+  assert.match(a.message, /\r\nReply-To: <hr@example.com>\r\n/);
+  assert.match(a.message, /\r\nSubject: =\?UTF-8\?B\?[A-Za-z0-9+/=]+\?=/);
+  assert.match(a.message, /\r\nContent-Type: multipart\/alternative; boundary="[^"]+"\r\n/);
+  const parts = [...a.message.matchAll(/Content-Type: text\/(plain|html); charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n([A-Za-z0-9+/=\r\n]+?)\r\n--/g)].map(x => [x[1], Buffer.from(x[2].replace(/\r\n/g, ''), 'base64').toString('utf8')]);
+  assert.deepEqual(parts.map(x => x[0]), ['plain', 'html']);
+  const body = parts[0][1], html = parts[1][1];
+  assert.match(body, new RegExp(`Hello ${emps[0].name}, here is http://127\\.0\\.0\\.1:\\d+/s/${emps[0].code} \\(code [A-Z2-9]{5}-[A-Z2-9]{5}\\) – Sirix Monitoring`));
+  assert.match(html, /SIRIX/);
+  assert.match(html, new RegExp(`<a href="http://127\\.0\\.0\\.1:\\d+/s/${emps[0].code}"[^>]*>Open my survey`));
+  assert.match(html, /Sirix Monitoring/);
+  // HTML rendering of the default template: button, code box, bullet list, escaping
+  const vars = mail.varsFor({ name: '<Ana> Doe', code: emps[0].code }, 'https://x.test');
+  const h = mail.htmlEmail('invite', mail.render(mail.DEFAULT_TEMPLATES.invite.body, vars), vars);
+  assert.match(h, /Hi &lt;Ana&gt;,/);
+  assert.ok(!/style="[^"]*"[^ >]/.test(h.replace(/style="[^"]*"/g, 'style=""')), 'no stray quotes inside style attributes');
+  assert.match(h, /<li[^>]*>Answers are anonymous/);
+  assert.match(h, new RegExp(`>${db.formatCode(emps[0].code)}<`));
+  assert.ok(!h.includes('{link}'));
+  const prev = await http('GET', '/api/admin/mail/preview/report');
+  assert.equal(prev.status, 200);
+  assert.match(prev.text, /See my report/);
+  const ov = (await http('GET', '/api/admin/overview')).json;
+  assert.ok(ov.employees.find(e => e.id === emps[0].id).inviteSentAt);
+  assert.equal((await http('GET', '/api/admin/mail')).json.counts.invite.unsent, 0);
+  // one failure is reported per person and does not stop the others
+  mail.setTransport(async (s, from, to) => { if (to === 'b@example.com') throw new Error('mailbox full'); });
+  r = await http('POST', '/api/admin/mail/send', { kind: 'invite', filter: 'all' });
+  assert.equal(r.status, 200, r.text);
+  st = await waitJob();
+  assert.equal(st.sent, 1);
+  assert.equal(st.failed.length, 1);
+  assert.match(st.failed[0].error, /mailbox full/);
+  // single person
+  r = await http('POST', '/api/admin/mail/send', { kind: 'invite', filter: 'ids', ids: [emps[0].id] });
+  assert.equal(r.json.total, 1);
+  await waitJob();
+  // test email
+  assert.equal((await http('POST', '/api/admin/mail/test', { to: 'not-an-email' })).status, 400);
+  assert.equal((await http('POST', '/api/admin/mail/test', { to: 'me@example.com' })).status, 200);
+  // report notices: refused until a survey is released, then only to people who have a report
+  assert.equal((await http('POST', '/api/admin/mail/send', { kind: 'report', filter: 'all' })).status, 400);
+  await http('POST', '/api/admin/demo', { what: 'responses' });
+  await http('PUT', '/api/admin/groups/staff', { status: 'released' });
+  info = (await http('GET', '/api/admin/mail')).json;
+  assert.equal(info.counts.report.blocked, null);
+  const staffWithEmail = db.listEmployees().filter(e => e.email && e.groups.includes('staff'));
+  assert.ok(info.counts.report.all <= staffWithEmail.length);
+  await http('PUT', '/api/admin/groups/staff', { status: 'open' });
+  mail.setTransport(async () => {});
+});
+
+test('email: the SMTP client speaks the protocol (EHLO, AUTH PLAIN, MAIL, RCPT, DATA with dot-stuffing, QUIT)', async () => {
+  const net = require('node:net');
+  const log = [];
+  let data = '';
+  const srv = net.createServer(sock => {
+    sock.write('220 fake ESMTP\r\n');
+    let inData = false;
+    sock.on('data', chunk => {
+      const text = chunk.toString();
+      if (inData) { data += text; if (data.includes('\r\n.\r\n')) { inData = false; sock.write('250 OK queued\r\n'); } return; }
+      for (const line of text.split('\r\n').filter(Boolean)) {
+        log.push(line);
+        if (line.startsWith('EHLO')) sock.write('250-fake\r\n250-AUTH PLAIN LOGIN\r\n250 8BITMIME\r\n');
+        else if (line.startsWith('AUTH PLAIN')) sock.write(Buffer.from(line.slice(11), 'base64').toString() === '\0user\0pw' ? '235 ok\r\n' : '535 Incorrect authentication data\r\n');
+        else if (line.startsWith('MAIL FROM')) sock.write('250 ok\r\n');
+        else if (line.startsWith('RCPT TO')) sock.write(line.includes('bad@') ? '550 no such user\r\n' : '250 ok\r\n');
+        else if (line === 'DATA') { inData = true; sock.write('354 go\r\n'); }
+        else if (line === 'QUIT') { sock.write('221 bye\r\n'); sock.end(); }
+        else sock.write('500 what\r\n');
+      }
+    });
+  });
+  await new Promise(res => srv.listen(0, '127.0.0.1', res));
+  const settings = { host: '127.0.0.1', port: srv.address().port, security: 'none', user: 'user', password: 'pw', verifyTls: true };
+  await mail.smtpSend(settings, 'from@example.com', 'to@example.com', 'Subject: hi\r\n\r\n.leading dot\r\nbody');
+  assert.ok(log.some(l => l.startsWith('EHLO ')));
+  assert.ok(log.includes('MAIL FROM:<from@example.com>'));
+  assert.ok(log.includes('RCPT TO:<to@example.com>'));
+  assert.match(data, /\r\n\.\.leading dot\r\n/);
+  await assert.rejects(mail.smtpSend(settings, 'from@example.com', 'bad@example.com', 'x'), /no such user/);
+  await assert.rejects(mail.smtpSend({ ...settings, password: 'wrong' }, 'from@example.com', 'to@example.com', 'x'), /AUTH failed: 535/);
+  await assert.rejects(mail.smtpSend({ ...settings, port: 1 }, 'from@example.com', 'to@example.com', 'x'), /Cannot connect/);
+  srv.close();
+});
+
+test('legacy French defaults in an existing database are translated on start', () => {
+  db.updateGroup('ops', { name: 'Sondage d’appréciation du travail (opérations)' });
+  const qs = db.listQuestions('ops');
+  const fr = ['Cette personne respecte ses engagements et fait les suivis nécessaires sans qu’on ait à la relancer.', 'Cette personne répond dans un délai raisonnable et communique de façon claire et précise.', 'Cette personne est disponible quand j’ai besoin d’elle et collabore bien avec les autres.', 'Cette personne est respectueuse, agréable à côtoyer et ouverte aux autres points de vue.', 'Je peux me fier à la qualité du travail de cette personne.', 'Commentaire constructif pour cette personne'];
+  seed.restoreDefaultQuestions('ops');
+  const ids = db.listQuestions('ops').map(q => q.id);
+  db.replaceQuestions('ops', fr.map((text, i) => ({ id: ids[i], text, type: i === 5 ? 'text' : 'rating', category: 'X' })));
+  seed.ensureDefaults();
+  assert.equal(db.getGroup('ops').name, 'Work Appreciation Survey (operations)');
+  const after = db.listQuestions('ops');
+  assert.deepEqual(after.map(q => q.id), ids);                     // ids (and answers) kept
+  assert.equal(after[0].text, 'This person keeps their commitments and follows up without having to be reminded.');
+  assert.equal(after[0].category, 'Reliability and follow-up');
 });
 
 test('logout clears the session', async () => {
