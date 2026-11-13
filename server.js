@@ -237,7 +237,7 @@ function owner(handler) {
   return (req, res, m) => {
     const s = session(req);
     if (!s) return json(res, 401, { error: 'Please log in.' });
-    if (s.role !== 'owner') return json(res, 403, { error: 'Only the owner account can do this.' });
+    if (s.role !== 'owner') return json(res, 403, { error: 'Not available.' });
     return handler(req, res, m);
   };
 }

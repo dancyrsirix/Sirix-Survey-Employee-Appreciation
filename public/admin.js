@@ -67,7 +67,7 @@
     ov = await api('GET', '/api/admin/overview');
     if (!resultsGroup || !ov.groups.find(g => g.id === resultsGroup)) resultsGroup = ov.groups[0] && ov.groups[0].id;
     role = ov.role === 'manager' ? 'manager' : 'owner';
-    document.getElementById('hdr-right').replaceChildren(h('span', { class: 'hdr-row' }, ov.orgName + ' · ', isOwner() ? h('span', { id: 'notif' }) : h('span', { class: 'small', title: 'Restricted account: averages only' }, ov.username + ' (averages only) · '), h('button', { class: 'link', style: 'color:#fff', onclick: async () => { stopNotifPoll(); await api('POST', '/api/admin/logout'); renderLogin(); } }, 'Log out')));
+    document.getElementById('hdr-right').replaceChildren(h('span', { class: 'hdr-row' }, ov.orgName + ' · ', isOwner() ? h('span', { id: 'notif' }) : null, h('button', { class: 'link', style: 'color:#fff', onclick: async () => { stopNotifPoll(); await api('POST', '/api/admin/logout'); renderLogin(); } }, 'Log out')));
     if (isOwner()) startNotifPoll(); else stopNotifPoll();
   }
 
@@ -110,7 +110,7 @@
   function render() {
     const tabs = isOwner()
       ? [['results', 'Results'], ['reports', 'Individual reports'], ['employees', 'Employees & links'], ['email', 'Email'], ['questions', 'Surveys & questions'], ['settings', 'Settings & demo data']]
-      : [['results', 'Results'], ['reports', 'Individual reports'], ['employees', 'Employees'], ['settings', 'My password']];
+      : [['results', 'Results'], ['reports', 'Individual reports'], ['employees', 'Employees'], ['settings', 'Settings']];
     if (!tabs.some(([id]) => id === tab)) tab = 'results';
     stopMailPoll();
     app.replaceChildren(
@@ -221,7 +221,6 @@
     const groupShort = id => id === 'staff' ? 'Staff' : id === 'ops' ? 'Operations' : id;
     if (!isOwner()) {
       return setTab(h('div', { class: 'card' }, h('h2', null, `Employees (${ov.employees.length})`),
-        h('p', { class: 'muted small' }, 'Who is evaluated in which survey. Restricted account: personal links, participation and individual evaluations are not shown.'),
         h('div', { class: 'table-wrap' }, h('table', null,
           h('thead', null, h('tr', null, h('th', null, 'Name'), h('th', null, 'Department'), h('th', null, 'Surveys'), h('th', null, 'Emailed'))),
           h('tbody', null, ov.employees.map(e => h('tr', null,
@@ -341,10 +340,10 @@
     const ready = r.people.filter(p => p.visible).length;
     const setStatus = async (status) => { try { await api('PUT', `/api/admin/groups/${g.id}`, { status }); toast('Survey updated'); await loadOverview(); resultsCache = {}; render(); } catch (ex) { toast(ex.message, 'error'); } };
     const statusCard = h('div', { class: 'card' },
-      h('h2', null, 'Sending reports to employees'),
+      h('h2', null, isOwner() ? 'Sending reports to employees' : 'Personal reports'),
       h('p', null, 'Each employee gets a personal report: their average per category next to the department and company averages, a "point fort", a priority to work on, and the constructive comments received. A report exists only for people with at least ', h('b', null, r.minResponses), ' evaluations.'),
       h('p', null, 'Current status of this survey: ', h('span', { class: 'pill ' + (g.status === 'released' ? 'released' : g.status === 'closed' ? 'closed' : 'todo') }, g.status), ' · ', h('b', null, ready), ` of ${r.people.length} people have enough evaluations for a report.`),
-      h('ol', { class: 'small' },
+      !isOwner() ? null : h('ol', { class: 'small' },
         h('li', null, 'When the evaluation period is over, close the survey (nobody can submit anymore). Review the comments below before releasing: they are shown to the person as written.'),
         h('li', null, h('b', null, 'Release the reports.'), ' Each employee then sees their own report (and nobody else’s) when they open their personal link, the same link they used to fill out the survey.'),
         h('li', null, 'Tell everyone the reports are available: the "Email" tab sends the notice to everyone who has a report. Or print the reports to PDF below and email them one by one.')),
@@ -382,17 +381,10 @@
     } }, label);
     const cur = h('input', { type: 'password', autocomplete: 'current-password' });
     const nw = h('input', { type: 'password', autocomplete: 'new-password' });
-    const passwordCard = h('div', { class: 'card' }, h('h2', null, isOwner() ? 'Change admin password' : 'Change my password'),
+    const passwordCard = h('div', { class: 'card' }, h('h2', null, isOwner() ? 'Change admin password' : 'Change password'),
       h('label', null, 'Current password'), cur, h('label', null, 'New password (at least 8 characters)'), nw,
       h('div', { class: 'actions' }, h('button', { onclick: async () => { try { await api('POST', '/api/admin/password', { current: cur.value, password: nw.value }); toast('Password changed'); cur.value = nw.value = ''; } catch (ex) { toast(ex.message, 'error'); } } }, 'Change password')));
-    if (!isOwner()) {
-      return setTab(passwordCard,
-        h('div', { class: 'card' }, h('h2', null, 'What this account sees'),
-          h('ul', { class: 'small' },
-            h('li', null, 'Results as averages, by department and by person, once a person has enough evaluations. The comments are shown in random order, without their author.'),
-            h('li', null, 'The individual reports employees receive, and the list of employees and surveys.'),
-            h('li', null, 'Who evaluated whom, individual evaluations, personal links and all settings are reserved to the owner account.'))));
-    }
+    if (!isOwner()) return setTab(passwordCard);
     setTab(
       h('div', { class: 'card' }, h('h2', null, 'Settings'),
         h('label', null, 'Organization name'), org,
