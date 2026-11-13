@@ -85,7 +85,8 @@
       h('select', { onchange: (e) => { resultsGroup = e.target.value; resultsDept = ''; expanded.clear(); renderResults(); } }, ov.groups.map(g => h('option', { value: g.id, selected: g.id === resultsGroup }, g.name))),
       h('select', { onchange: (e) => { resultsDept = e.target.value; renderResults(); } }, h('option', { value: '' }, 'All departments'), depts.map(d => h('option', { value: d, selected: d === resultsDept }, d))),
       h('button', { class: 'secondary', onclick: () => { delete resultsCache[resultsGroup]; renderResults(); } }, 'Refresh'),
-      h('a', { class: 'btn', href: '/api/admin/results/' + resultsGroup + '.csv', style: 'flex:0 0 auto;text-decoration:none' }, 'Export CSV'),
+      h('a', { class: 'btn', href: '/api/admin/results/' + resultsGroup + '.csv', style: 'flex:0 0 auto;text-decoration:none' }, 'Export averages (CSV)'),
+      h('a', { class: 'btn', href: '/api/admin/evaluations/' + resultsGroup + '.csv', style: 'flex:0 0 auto;text-decoration:none', title: 'One line per evaluation, with the name of the person who wrote it' }, 'Export every evaluation (CSV)'),
     );
     const stats = h('div', { class: 'stats' },
       h('div', { class: 'stat' }, h('div', { class: 'v' }, r.totalResponses), h('div', { class: 'l' }, 'Evaluations submitted')),
@@ -118,14 +119,26 @@
         ownSet ? ratingQs.map(q => h('td', { class: 'num' }, p.visible && p.ratings[q.id] ? h('span', { class: scoreClass(p.ratings[q.id].avg) }, fmt(p.ratings[q.id].avg)) : ''))
           : h('td', { colspan: ratingQs.length, class: 'small muted' }, p.visible ? 'Other statements: click the row for the breakdown' : ''),
       ));
-      if (expanded.has(p.id) && p.visible) {
+      const evals = p.evaluations || [];
+      if (expanded.has(p.id) && (p.visible || evals.length)) {
+        const evalTable = h('table', null,
+          h('thead', null, h('tr', null, h('th', null, 'Written by'), h('th', { class: 'num' }, 'Overall'), pRatingQs.map((q, i) => h('th', { class: 'num', title: q.text }, q.category || 'Q' + (i + 1))), h('th', null, 'Comment'))),
+          h('tbody', null, evals.map(ev => h('tr', null,
+            h('td', null, ev.evaluator ? h('b', null, ev.evaluator) : h('span', { class: 'muted' }, 'Submitted before names were recorded')),
+            h('td', { class: 'num' }, ev.overall == null ? '' : h('span', { class: scoreClass(ev.overall) }, fmt(ev.overall))),
+            pRatingQs.map(q => h('td', { class: 'num' }, ev.ratings[q.id] == null ? h('span', { class: 'muted' }, 'N/A') : h('span', { class: scoreClass(ev.ratings[q.id]) }, String(ev.ratings[q.id])))),
+            h('td', { class: 'small' }, pTextQs.map(q => ev.comments[q.id] || '').filter(Boolean).join(' | ')),
+          ))));
         rows.push(h('tr', null, h('td', { colspan: 3 + ratingQs.length }, h('div', { class: 'detail' },
-          pRatingQs.map((q, i) => {
+          h('h3', null, `Each evaluation received (${evals.length})`),
+          h('p', { class: 'muted small' }, 'Confidential: only you see who wrote what. Employees only ever receive averages and comments in random order.'),
+          evals.length ? h('div', { class: 'table-wrap' }, evalTable) : h('p', { class: 'muted small' }, 'No evaluations yet.'),
+          p.visible ? h('h3', null, 'Averages') : h('p', { class: 'muted small' }, `Averages and the personal report appear once ${r.minResponses} evaluations are in.`),
+          !p.visible ? null : pRatingQs.map((q, i) => {
             const s = p.ratings[q.id];
             return h('div', { class: 'small', style: 'margin-bottom:4px' }, h('b', null, (q.category || 'Q' + (i + 1)) + ': '), q.text, ' ',
               s ? [h('span', { class: scoreClass(s.avg) }, fmt(s.avg)), ` (${s.n} answers)`, h('span', { class: 'dist', title: '1 to 5 distribution: ' + s.dist.join(' / ') }, s.dist.map(n => h('span', { style: `height:${4 + n * 4}px` })))] : h('span', { class: 'muted' }, 'no answers'));
           }),
-          pTextQs.map(q => h('div', null, h('h3', null, q.text), (p.comments[q.id] || []).length ? h('ul', null, p.comments[q.id].map(c => h('li', null, c))) : h('p', { class: 'muted small' }, 'No comments.'))),
         ))));
       }
     }
@@ -136,8 +149,15 @@
     setTab(
       h('div', { class: 'card' }, h('h2', null, r.group.name), controls, h('div', { style: 'height:12px' }), stats),
       h('div', { class: 'card' }, h('h2', null, 'By department'), h('p', { class: 'muted small' }, 'Average score across all evaluations received by people in the department (1 to 5).'), h('div', { class: 'table-wrap' }, deptTable)),
-      h('div', { class: 'card' }, h('h2', null, 'By person'), h('p', { class: 'muted small' }, 'Click a row to see the breakdown and written comments. People with fewer evaluations than the minimum stay hidden to protect anonymity.', otherSets.length ? ' Some people are evaluated with the statements of another survey (set per person in the Employees tab); their breakdown is in the row detail and the department columns only cover this survey’s statements.' : ''), h('div', { class: 'table-wrap' }, peopleTable),
+      h('div', { class: 'card' }, h('h2', null, 'By person'), h('p', { class: 'muted small' }, 'Click a row to see each evaluation received, with the name of the person who wrote it, and the averages. Averages (and the personal report an employee receives) only appear once the minimum number of evaluations is reached, so that no employee can work out who wrote what by elimination.', otherSets.length ? ' Some people are evaluated with the statements of another survey (set per person in the Employees tab); their breakdown is in the row detail and the department columns only cover this survey’s statements.' : ''), h('div', { class: 'table-wrap' }, peopleTable),
         h('h3', null, 'Statements'), h('ol', { class: 'small muted' }, ratingQs.map(q => h('li', null, q.category ? [h('b', null, q.category + ': '), q.text] : q.text)))),
+      h('div', { class: 'card' }, h('h2', null, 'By evaluator'),
+        h('p', { class: 'muted small' }, 'Who evaluated whom in this survey, with the overall score they gave. Confidential: only you see this.', r.unattributed ? ` ${r.unattributed} evaluation(s) were submitted before names were recorded and cannot be attributed.` : ''),
+        (r.evaluators || []).length ? h('div', { class: 'table-wrap' }, h('table', null,
+          h('thead', null, h('tr', null, h('th', null, 'Evaluator'), h('th', { class: 'num' }, 'Evaluations'), h('th', null, 'Evaluated (overall score given)'))),
+          h('tbody', null, r.evaluators.map(ev => h('tr', null,
+            h('td', null, h('b', null, ev.name)), h('td', { class: 'num' }, ev.targets.length),
+            h('td', { class: 'small' }, ev.targets.map((t, i) => [i ? ', ' : '', t.name, t.overall == null ? '' : [' ', h('span', { class: scoreClass(t.overall) }, fmt(t.overall))]]))))))) : h('p', { class: 'muted small' }, 'No named evaluations yet.')),
     );
   }
 
@@ -149,7 +169,7 @@
       h('td', null, h('b', null, e.name), h('div', { class: 'small muted' }, [e.role, e.email].filter(Boolean).join(' · '))),
       h('td', null, e.department),
       h('td', null, e.groups.map(g => h('span', { class: 'pill todo', style: 'margin-right:4px', title: groupName(g) }, groupShort(g))), e.question_set ? h('div', { class: 'small muted', title: 'Evaluated with the statements of ' + groupName(e.question_set) + ' in every survey' }, groupShort(e.question_set) + ' statements') : null),
-      h('td', null, h('span', { class: 'pill ' + (e.started ? 'done' : 'hidden') }, e.started ? 'started' : 'not yet')),
+      h('td', null, h('span', { class: 'pill ' + (e.started ? 'done' : 'hidden') }, e.started ? `${e.evaluated} evaluated` : 'not yet')),
       h('td', null, e.inviteSentAt ? h('span', { class: 'pill done', title: 'Personal link emailed ' + fmtDate(e.inviteSentAt) }, 'link sent') : h('span', { class: 'pill hidden' }, e.email ? 'not sent' : 'no email'), e.reportSentAt ? [' ', h('span', { class: 'pill released', title: 'Report notice emailed ' + fmtDate(e.reportSentAt) }, 'report sent')] : null),
       h('td', null, h('code', null, e.code), ' ', h('button', { class: 'link small', onclick: () => { navigator.clipboard.writeText(`${ov.baseUrl}/s/${e.code.replace('-', '')}`); toast('Link copied'); } }, 'copy link')),
       h('td', null, h('div', { class: 'row', style: 'gap:6px' },
@@ -164,7 +184,7 @@
     setTab(
       h('div', { class: 'card' },
         h('h2', null, 'Sharing the survey'),
-        h('p', null, 'Every employee has a personal access code. Send each person their own link (or the general link plus their code). The code only prevents double evaluations; it is never attached to the answers.'),
+        h('p', null, 'Every employee has a personal access code. Send each person their own link (or the general link plus their code). The code identifies the person: each evaluation is saved with its author, visible to you only, never to other employees.'),
         h('p', null, 'General link: ', h('code', null, ov.baseUrl + '/'), ' · Personal link format: ', h('code', null, ov.baseUrl + '/s/CODE')),
         h('div', { class: 'actions' }, h('button', { class: 'accent', onclick: () => { tab = 'email'; render(); } }, 'Email the personal links to everyone'), h('a', { class: 'btn', href: '/api/admin/links.csv', style: 'text-decoration:none;background:#fff;color:#1a1a1a' }, 'Download all links (CSV)'), h('button', { class: 'secondary', onclick: () => editEmployee(null) }, 'Add one employee')),
       ),
@@ -301,7 +321,7 @@
       h('div', { class: 'card' }, h('h2', null, 'Settings'),
         h('label', null, 'Organization name'), org,
         h('label', null, 'Minimum evaluations before a person\'s results are shown'), min,
-        h('p', { class: 'muted small' }, 'This protects anonymity. With a minimum of 3, nobody can work out who wrote a comment by elimination. Lowering it to 1 means a person who was evaluated once could guess their evaluator.'),
+        h('p', { class: 'muted small' }, 'This protects evaluators from their colleagues. With a minimum of 3, no employee can work out who wrote a comment in their report by elimination. Lowering it to 1 means a person who was evaluated once could guess their evaluator. You always see every evaluation with its author, whatever the minimum.'),
         h('div', { class: 'actions' }, h('button', { onclick: async () => { try { await api('PUT', '/api/admin/settings', { minResponses: min.value, orgName: org.value }); toast('Saved'); await loadOverview(); resultsCache = {}; } catch (ex) { toast(ex.message, 'error'); } } }, 'Save settings'))),
       h('div', { class: 'card' }, h('h2', null, 'Change admin password'),
         h('label', null, 'Current password'), cur, h('label', null, 'New password (at least 8 characters)'), nw,
@@ -314,12 +334,12 @@
       h('div', { class: 'card' }, h('h2', null, 'Maintenance'),
         h('p', { class: 'muted small' }, 'After updating the code on the server (git pull), restart the app to load it. The service comes back by itself within a few seconds.'),
         h('div', { class: 'actions' }, h('button', { class: 'secondary', onclick: async () => { if (!confirm('Restart the app now? It will be unavailable for a few seconds.')) return; try { await api('POST', '/api/admin/restart'); toast('Restarting... reload this page in a few seconds'); } catch (ex) { toast(ex.message, 'error'); } } }, 'Restart the app'))),
-      h('div', { class: 'card' }, h('h2', null, 'How anonymity works'),
+      h('div', { class: 'card' }, h('h2', null, 'Who sees what'),
         h('ul', { class: 'small' },
-          h('li', null, 'Each evaluation is stored with only the survey, the colleague being evaluated and the answers. No evaluator, no timestamp, no IP address.'),
-          h('li', null, 'A separate list records that an access code has finished a given colleague, so each person can evaluate every colleague once. This list cannot be joined to the answers.'),
-          h('li', null, 'Written comments are shown in random order, and results stay hidden until the minimum number of evaluations is reached.'),
-          h('li', null, 'The admin only sees whether someone has participated, never whom they evaluated.'))),
+          h('li', null, 'Answers are confidential: never shared with other employees, visible to you, the owner/administrator.'),
+          h('li', null, 'Each evaluation is stored with the survey, the colleague being evaluated, the answers and the author. You see it in the Results tab (row detail, "By evaluator" and the evaluations CSV).'),
+          h('li', null, 'Evaluations submitted before names were recorded (before 13 November 2026) have no author and can never be attributed.'),
+          h('li', null, 'Employees only ever receive averages and comments in random order, and only once the minimum number of evaluations is reached. A personal report never shows who evaluated them.'))),
     );
   }
 

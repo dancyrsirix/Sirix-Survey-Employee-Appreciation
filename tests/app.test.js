@@ -115,13 +115,43 @@ test('submit once per colleague, partial answers allowed, empty rejected, self r
   assert.equal(r.status, 400);
 });
 
-test('stored answers carry no evaluator identity', () => {
-  const cols = db.db.prepare('PRAGMA table_info(responses)').all().map(c => c.name);
-  assert.deepEqual(cols.sort(), ['group_id', 'id', 'target_id']);
-  const acols = db.db.prepare('PRAGMA table_info(answers)').all().map(c => c.name);
-  assert.deepEqual(acols.sort(), ['question_id', 'rating', 'response_id', 'text']);
+test('each evaluation is stored with its author, shown to the admin only', async () => {
+  const emps = db.listEmployees();
+  const alice = emps.find(e => e.role === 'HR Manager');
+  const bob = emps.find(e => e.role === 'IT Manager');
   const row = db.db.prepare('SELECT * FROM responses').get();
   assert.match(row.id, /^[0-9a-f-]{36}$/);
+  assert.equal(row.evaluator_id, alice.id);
+  // admin results: per-person evaluations with the author, and the by-evaluator summary
+  const r = (await http('GET', '/api/admin/results/staff')).json;
+  const p = r.people.find(x => x.id === bob.id);
+  assert.equal(p.visible, false);
+  assert.equal(p.evaluations.length, 1);
+  assert.equal(p.evaluations[0].evaluator, alice.name);
+  assert.deepEqual(Object.values(p.evaluations[0].comments), ['Great colleague']);
+  assert.deepEqual(r.evaluators.map(e => [e.name, e.targets.map(t => t.name)]), [[alice.name, [bob.name]]]);
+  assert.equal(r.unattributed, 0);
+  // an evaluation from before authors were recorded stays unattributed
+  const qs = db.listQuestions('staff');
+  const carol = emps.find(e => e.groups.includes('staff') && e.id !== alice.id && e.id !== bob.id);
+  db.db.prepare('INSERT INTO responses (id, group_id, target_id) VALUES (?, ?, ?)').run('legacy-1', 'staff', carol.id);
+  db.db.prepare('INSERT INTO answers (response_id, question_id, rating, text) VALUES (?, ?, 3, NULL)').run('legacy-1', qs.find(q => q.type === 'rating').id);
+  const r2 = (await http('GET', '/api/admin/results/staff')).json;
+  const pc = r2.people.find(x => x.id === carol.id);
+  assert.equal(pc.evaluations.length, 1);
+  assert.equal(pc.evaluations[0].evaluator, null);
+  assert.equal(r2.unattributed, 1);
+  // CSV with one line per evaluation
+  const csv = await http('GET', '/api/admin/evaluations/staff.csv');
+  assert.equal(csv.status, 200);
+  assert.match(csv.text, new RegExp(`^"?${alice.name}"?,"?${bob.name}"?,`, 'm'));
+  assert.match(csv.text, /Submitted before names were recorded/);
+  // the employee-facing report never carries the per-evaluation detail
+  const rep = db.reportFor('staff', bob.id);
+  assert.equal(rep.person.evaluations, undefined);
+  assert.equal(JSON.stringify(rep).includes(alice.name), false);
+  db.db.prepare("DELETE FROM answers WHERE response_id = 'legacy-1'").run();
+  db.db.prepare("DELETE FROM responses WHERE id = 'legacy-1'").run();
 });
 
 test('results hide people under the minimum and show them above it', async () => {
@@ -323,7 +353,7 @@ test('email: settings, templates, sending personal links through a fake transpor
   const h = mail.htmlEmail('invite', mail.render(mail.DEFAULT_TEMPLATES.invite.body, vars), vars);
   assert.match(h, /Hi &lt;Ana&gt;,/);
   assert.ok(!/style="[^"]*"[^ >]/.test(h.replace(/style="[^"]*"/g, 'style=""')), 'no stray quotes inside style attributes');
-  assert.match(h, /<li[^>]*>Answers are anonymous/);
+  assert.match(h, /<li[^>]*>Your answers are confidential/);
   assert.match(h, new RegExp(`>${db.formatCode(emps[0].code)}<`));
   assert.ok(!h.includes('{link}'));
   // {signature}: plain text in the text part, styled block in the HTML part

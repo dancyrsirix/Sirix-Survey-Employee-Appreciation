@@ -1,6 +1,6 @@
 # Sirix Employee Appreciation Survey
 
-A small, self-hosted web app where employees anonymously evaluate the colleagues they work with, including executives. It follows the Sirix work appreciation form: 5 statements (one per category) rated 1 to 5 or N/A, plus one optional constructive comment. Everything is in English (the texts are editable in the admin). Each person can evaluate every colleague once, can skip any statement or any colleague, and nobody (not even the administrator) can see who wrote what. Once the survey is over, every employee receives a personal report.
+A small, self-hosted web app where employees evaluate the colleagues they work with, including executives. It follows the Sirix work appreciation form: 5 statements (one per category) rated 1 to 5 or N/A, plus one optional constructive comment. Everything is in English (the texts are editable in the admin). Each person can evaluate every colleague once and can skip any statement or any colleague. Answers are confidential: never shared with other employees, visible with their author to the administrator only. Once the survey is over, every employee receives a personal report of averages and comments, without names.
 
 No npm dependencies: it runs on Node.js 22+ with the built-in SQLite database.
 
@@ -16,16 +16,11 @@ No npm dependencies: it runs on Node.js 22+ with the built-in SQLite database.
 - **Personal reports**: when you release the results, each employee sees their own report on their personal link: average per category next to the department and company averages, a "point fort", a priority to work on, and the constructive comments received. Reports can also be printed or saved as PDF from the admin.
 - **Admin dashboard** (`/admin`): results by department and by person, written comments, CSV export, employee list with personal links, question editor, open/close/release each survey, sample data loader.
 
-## How anonymity works
+## Who sees what
 
-1. When someone submits an evaluation, the server writes two separate records:
-   - a lock saying "code X has finished colleague Y" (so the same pair cannot be submitted again), and
-   - the answers, stored with only the survey and the colleague being evaluated. No evaluator id, no timestamp, no IP address, and a random id instead of a sequential one, so there is no order to correlate against the lock table.
-2. Results for a person are hidden until they have at least 3 evaluations (configurable in Settings). This prevents identifying an evaluator by elimination.
-3. Written comments are shown in random order.
-4. The admin sees whether each person has participated (yes/no), never whom they evaluated.
-
-The one thing the system must know is which (evaluator, colleague) pairs are finished, otherwise the "once per colleague" rule cannot be enforced. That list is not shown anywhere in the admin and cannot be linked to any answer.
+1. Each evaluation is stored with the survey, the colleague being evaluated, the answers and the author. A separate lock table ("code X has finished colleague Y") enforces the once-per-colleague rule.
+2. The administrator sees every evaluation with its author: in the Results tab (row detail and the "By evaluator" card) and in the "Export every evaluation" CSV. Evaluations submitted before 13 November 2026, when authors were not recorded, stay unattributed.
+3. Employees never see who evaluated them. Their personal report only shows averages and comments in random order, and only once they have at least 3 evaluations (configurable in Settings), so that nobody can identify an evaluator by elimination.
 
 ## Running it
 

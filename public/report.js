@@ -17,7 +17,7 @@ window.renderReport = function renderReport(r, opts = {}) {
     h('div', { class: 'small muted', style: 'text-align:right' }, 'Work appreciation report', h('br'), r.group.name)));
 
   if (!p.visible) {
-    card.append(h('div', { class: 'alert info' }, `${p.responses} evaluation(s) received. A report is only produced from ${r.minResponses} evaluations, to protect the anonymity of the respondents.`));
+    card.append(h('div', { class: 'alert info' }, `${p.responses} evaluation(s) received. A report is only produced from ${r.minResponses} evaluations, to protect the confidentiality of the respondents.`));
     return card;
   }
 
@@ -50,6 +50,6 @@ window.renderReport = function renderReport(r, opts = {}) {
     card.append(h('h3', null, q.text));
     card.append(list.length ? h('ul', { class: 'comments' }, list.map(c => h('li', null, c))) : h('p', { class: 'muted small' }, 'No comments received.'));
   }
-  card.append(h('div', { class: 'foot' }, h('span', null, 'Anonymous results: no answer is linked to its author.'), h('span', null, opts.orgName || 'Sirix Monitoring')));
+  card.append(h('div', { class: 'foot' }, h('span', null, 'Confidential: your colleagues never see who wrote what.'), h('span', null, opts.orgName || 'Sirix Monitoring')));
   return card;
 };

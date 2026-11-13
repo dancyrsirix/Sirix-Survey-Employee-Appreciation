@@ -198,14 +198,14 @@ function admin(handler) {
 }
 
 route('GET', /^\/api\/admin\/overview$/, admin((req, res) => {
-  const started = new Map(db.participation().map(p => [p.id, p.started]));
+  const started = new Map(db.participation().map(p => [p.id, p]));
   const mailed = db.mailStatus();
   json(res, 200, {
     orgName: db.getSetting('org_name'),
     minResponses: parseInt(db.getSetting('min_responses', '3'), 10),
     baseUrl: baseUrl(req),
     groups: db.listGroups().map(g => ({ ...g, questions: db.listQuestions(g.id) })),
-    employees: db.listEmployees().map(e => ({ ...e, code: db.formatCode(e.code), started: !!started.get(e.id), inviteSentAt: mailed.get(`${e.id}:invite`) || null, reportSentAt: mailed.get(`${e.id}:report`) || null })),
+    employees: db.listEmployees().map(e => ({ ...e, code: db.formatCode(e.code), started: !!(started.get(e.id) || {}).started, evaluated: (started.get(e.id) || {}).evaluated || 0, inviteSentAt: mailed.get(`${e.id}:invite`) || null, reportSentAt: mailed.get(`${e.id}:report`) || null })),
   });
 }));
 route('GET', /^\/api\/admin\/results\/([a-z0-9_-]+)$/, admin((req, res, m) => {
@@ -235,6 +235,25 @@ route('GET', /^\/api\/admin\/results\/([a-z0-9_-]+)\.csv$/, admin((req, res, m) 
     lines.push(row.map(csvEscape).join(','));
   }
   send(res, 200, '﻿' + lines.join('\r\n'), { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="results-${m[1]}.csv"` });
+}));
+// One line per evaluation with its author (confidential: admin only).
+route('GET', /^\/api\/admin\/evaluations\/([a-z0-9_-]+)\.csv$/, admin((req, res, m) => {
+  const r = db.results(m[1]);
+  if (!r) return json(res, 404, { error: 'Unknown survey.' });
+  const sets = Object.keys(r.questionSets).filter(id => id !== r.group.id);
+  const label = (id, q) => id === r.group.id ? q.text : `[${(db.getGroup(id) || { name: id }).name}] ${q.text}`;
+  const ratingQs = [], textQs = [];
+  for (const id of [r.group.id, ...sets]) {
+    for (const q of r.questionSets[id]) (q.type === 'rating' ? ratingQs : textQs).push({ ...q, label: label(id, q) });
+  }
+  const lines = [['Evaluator', 'Evaluated', 'Department', 'Role', 'Overall', ...ratingQs.map(q => q.label), ...textQs.map(q => q.label)].map(csvEscape).join(',')];
+  for (const p of r.people) {
+    for (const ev of p.evaluations) {
+      lines.push([ev.evaluator || 'Submitted before names were recorded', p.name, p.department, p.role, ev.overall == null ? '' : ev.overall.toFixed(2),
+        ...ratingQs.map(q => ev.ratings[q.id] ?? ''), ...textQs.map(q => ev.comments[q.id] || '')].map(csvEscape).join(','));
+    }
+  }
+  send(res, 200, '\ufeff' + lines.join('\r\n'), { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="evaluations-${m[1]}.csv"` });
 }));
 route('GET', /^\/api\/admin\/reports\/([a-z0-9_-]+)$/, admin((req, res, m) => {
   if (!db.getGroup(m[1])) return json(res, 404, { error: 'Unknown survey.' });

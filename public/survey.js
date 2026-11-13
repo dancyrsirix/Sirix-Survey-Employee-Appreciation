@@ -41,7 +41,7 @@
     parts.push(h('div', { class: 'card' },
       h('h2', null, 'Work Appreciation Survey'),
       h('p', { class: 'muted' }, `Hi ${data.employee.name.split(' ')[0]}. Evaluate your colleagues on their day-to-day work: 5 statements and an optional comment per person, about a minute each. Don’t work enough with someone? Skip that person, or tick N/A on the statements you can’t judge. You can come back later with the same code to continue.`),
-      h('p', { class: 'muted small' }, 'No answer is linked to its author: your answers are saved without your name, your code or the time. Results are shared as averages only, and only once a person has received a few evaluations.'),
+      h('p', { class: 'muted small' }, 'Your answers are confidential and are never shared with other employees. Results are shared as averages only, and only once a person has received a few evaluations.'),
     ));
     if (reports && reports.reports.length) {
       parts.push(h('div', { class: 'card' },
