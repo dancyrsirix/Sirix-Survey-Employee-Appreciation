@@ -19,8 +19,9 @@ No npm dependencies: it runs on Node.js 22+ with the built-in SQLite database.
 ## Who sees what
 
 1. Each evaluation is stored with the survey, the colleague being evaluated, the answers and the author. A separate lock table ("code X has finished colleague Y") enforces the once-per-colleague rule.
-2. The administrator sees every evaluation with its author: in the Results tab (row detail and the "By evaluator" card) and in the "Export every evaluation" CSV. Evaluations submitted before 13 November 2026, when authors were not recorded, stay unattributed.
-3. Employees never see who evaluated them. Their personal report only shows averages and comments in random order, and only once they have at least 3 evaluations (configurable in Settings), so that nobody can identify an evaluator by elimination.
+2. The owner account sees every evaluation with its author: in the Results tab (row detail and the "By evaluator" card) and in the "Export every evaluation" CSV. Evaluations submitted before 13 November 2026, when authors were not recorded, stay unattributed.
+3. **Restricted admin accounts** (created by the owner under Settings, "Restricted admin accounts") log in on the same page and see averages only: results by department and by person, the individual reports and the employee list. The server never sends them individual evaluations, evaluator names, the notification feed, personal access codes or links, and refuses every change (employees, surveys, settings, emails, resets). They can only change their own password.
+4. Employees never see who evaluated them. Their personal report only shows averages and comments in random order, and only once they have at least 3 evaluations (configurable in Settings), so that nobody can identify an evaluator by elimination.
 
 ## Running it
 
@@ -30,7 +31,7 @@ npm start
 # open http://localhost:3000/admin  (administrator)
 ```
 
-The first time you open `/admin` you are asked to create the administrator username and password. Only a salted hash is stored in the database. You can change the password later under Settings.
+The first time you open `/admin` you are asked to create the administrator (owner) username and password. Only a salted hash is stored in the database. You can change the password later under Settings, where you can also create restricted admin accounts that see averages only (see "Who sees what").
 
 Alternatively set the credentials with environment variables (see `.env.example`):
 

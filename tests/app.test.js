@@ -554,6 +554,83 @@ test('operations survey gets the operator-specific statements; an untouched gene
   seed.restoreDefaultQuestions('ops');
 });
 
+test('a restricted admin account sees averages only, never who evaluated whom, and cannot change anything', async () => {
+  // Owner creates the account; the owner username is refused; hashes never leave the server.
+  let r = await http('POST', '/api/admin/managers', { username: 'admin', password: 'manager-pass-1' });
+  assert.equal(r.status, 400);
+  r = await http('POST', '/api/admin/managers', { username: 'jon', password: 'short' });
+  assert.equal(r.status, 400);
+  r = await http('POST', '/api/admin/managers', { username: 'jon', password: 'manager-pass-1' });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.replaced, false);
+  r = await http('GET', '/api/admin/managers');
+  assert.deepEqual(r.json.managers, [{ username: 'jon' }]);
+  assert.doesNotMatch(db.getSetting('admin_managers'), /manager-pass-1/);
+
+  // The manager logs in on the same endpoint and gets the manager role.
+  r = await http('POST', '/api/admin/login', { username: 'jon', password: 'wrong-pass-1' });
+  assert.equal(r.status, 401);
+  r = await http('POST', '/api/admin/login', { username: 'jon', password: 'manager-pass-1' });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.role, 'manager');
+  const jon = r.headers.get('set-cookie').split(';')[0];
+  r = await http('GET', '/api/admin/status', null, { cookie: jon });
+  assert.deepEqual([r.json.loggedIn, r.json.role, r.json.username], [true, 'manager', 'jon']);
+  assert.equal((await http('GET', '/api/admin/status')).json.role, 'owner');
+
+  // Overview without access codes or participation; results without evaluations or evaluators.
+  r = await http('GET', '/api/admin/overview', null, { cookie: jon });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.role, 'manager');
+  assert.ok(r.json.employees.length > 0);
+  for (const e of r.json.employees) { assert.equal(e.code, undefined); assert.equal(e.started, undefined); assert.equal(e.evaluated, undefined); assert.ok(e.name); }
+  const own = await http('GET', '/api/admin/overview');
+  assert.ok(own.json.employees.every(e => e.code));
+  r = await http('GET', '/api/admin/results/staff', null, { cookie: jon });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.evaluators, undefined);
+  assert.equal(r.json.unattributed, undefined);
+  assert.ok(r.json.people.length > 0);
+  for (const p of r.json.people) { assert.equal(p.evaluations, undefined); assert.ok('overall' in p); }
+  assert.ok(Array.isArray((await http('GET', '/api/admin/results/staff')).json.evaluators));
+  assert.equal((await http('GET', '/api/admin/results/staff.csv', null, { cookie: jon })).status, 200);
+  assert.equal((await http('GET', '/api/admin/reports/staff', null, { cookie: jon })).status, 200);
+
+  // Everything that names evaluators, exposes codes or changes data is refused.
+  const refused = [
+    ['GET', '/api/admin/activity'], ['GET', '/api/admin/evaluations/staff.csv'], ['GET', '/api/admin/links.csv'],
+    ['PUT', '/api/admin/employees/00000000-0000-0000-0000-000000000000', { names_consent: true }], ['DELETE', '/api/admin/employees/00000000-0000-0000-0000-000000000000'],
+    ['POST', '/api/admin/employees', { name: 'X', department: 'Y' }], ['POST', '/api/admin/employees/import', { csv: '' }],
+    ['PUT', '/api/admin/groups/staff', { status: 'closed' }], ['PUT', '/api/admin/settings', { minResponses: 1 }],
+    ['POST', '/api/admin/demo', { what: 'all' }], ['POST', '/api/admin/reset', { what: 'all' }], ['GET', '/api/admin/mail'],
+    ['POST', '/api/admin/mail/send', { kind: 'invite', filter: 'all' }], ['POST', '/api/admin/restart'],
+    ['GET', '/api/admin/managers'], ['POST', '/api/admin/managers', { username: 'eve', password: 'eve-pass-123' }], ['DELETE', '/api/admin/managers/jon'],
+  ];
+  for (const [method, p, body] of refused) {
+    r = await http(method, p, body, { cookie: jon });
+    assert.equal(r.status, 403, method + ' ' + p);
+  }
+  assert.equal(db.getSetting('min_responses', '3'), '3');
+
+  // The manager changes their own password; the owner password is untouched.
+  r = await http('POST', '/api/admin/password', { current: 'wrong', password: 'manager-pass-2' }, { cookie: jon });
+  assert.equal(r.status, 400);
+  r = await http('POST', '/api/admin/password', { current: 'manager-pass-1', password: 'manager-pass-2' }, { cookie: jon });
+  assert.equal(r.status, 200);
+  assert.equal((await http('POST', '/api/admin/login', { username: 'jon', password: 'manager-pass-2' })).status, 200);
+  assert.equal((await http('POST', '/api/admin/login', { username: 'admin', password: 'manager-pass-2' })).status, 401);
+
+  // Owner resets the password, then removes the account: the session dies at once.
+  r = await http('POST', '/api/admin/managers', { username: 'jon', password: 'manager-pass-3' });
+  assert.equal(r.json.replaced, true);
+  assert.equal((await http('POST', '/api/admin/login', { username: 'jon', password: 'manager-pass-3' })).status, 200);
+  r = await http('DELETE', '/api/admin/managers/jon');
+  assert.equal(r.status, 200);
+  assert.equal((await http('DELETE', '/api/admin/managers/jon')).status, 404);
+  assert.equal((await http('GET', '/api/admin/overview', null, { cookie: jon })).status, 401);
+  assert.equal((await http('POST', '/api/admin/login', { username: 'jon', password: 'manager-pass-3' })).status, 401);
+});
+
 test('logout clears the session', async () => {
   await http('POST', '/api/admin/logout');
   const r = await http('GET', '/api/admin/overview', null, { cookie: 'admin_session=garbage.1.2.sig' });

@@ -85,33 +85,54 @@ function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
 function adminConfigured() {
   return !!(ENV_ADMIN_PASSWORD || db.getSetting('admin_password_hash'));
 }
-function checkCredentials(username, password) {
+function ownerUsername() { return ENV_ADMIN_PASSWORD ? (ENV_ADMIN_USER || 'admin') : db.getSetting('admin_user', 'admin'); }
+function ownerCredentials(username, password) {
   if (ENV_ADMIN_PASSWORD) return safeEqual(username, ENV_ADMIN_USER || 'admin') && safeEqual(password, ENV_ADMIN_PASSWORD);
   const stored = db.getSetting('admin_password_hash');
   if (!stored) return false;
   const [salt] = stored.split(':');
   return safeEqual(username, db.getSetting('admin_user', 'admin')) && safeEqual(hashPassword(password, salt), stored);
 }
+// Restricted admin accounts ("managers"): they log in on the same page but only ever see averages,
+// never who evaluated whom, and cannot change anything. Stored as [{ username, hash }] in the settings table.
+const MANAGER_USERNAME = /^[A-Za-z0-9._-]{1,40}$/;
+function listManagers() { try { return JSON.parse(db.getSetting('admin_managers', '[]')) || []; } catch { return []; } }
+function saveManagers(list) { db.setSetting('admin_managers', JSON.stringify(list)); }
+function checkHash(password, stored) { const [salt] = String(stored).split(':'); return safeEqual(hashPassword(password, salt), stored); }
+// Returns the role of the account these credentials belong to ('owner' or 'manager'), or null.
+function checkCredentials(username, password) {
+  if (ownerCredentials(username, password)) return 'owner';
+  const m = listManagers().find(x => safeEqual(x.username, username));
+  return m && checkHash(password, m.hash) ? 'manager' : null;
+}
 
 // ---------- admin sessions (signed cookie) ----------
 function sign(payload) {
   return crypto.createHmac('sha256', db.getSetting('secret')).update(payload).digest('base64url');
 }
-function makeSession() {
+function makeSession(role = 'owner', username = '') {
   const exp = Date.now() + SESSION_HOURS * 3600_000;
-  const payload = `admin.${exp}.${crypto.randomBytes(8).toString('hex')}`;
+  const payload = `${role === 'manager' ? 'manager' : 'admin'}.${exp}.${crypto.randomBytes(8).toString('hex')}.${Buffer.from(username).toString('base64url')}`;
   return `${payload}.${sign(payload)}`;
 }
-function isAdmin(req) {
+// The logged-in account, { role: 'owner' | 'manager', username }, or null.
+function session(req) {
   const token = cookies(req).admin_session;
-  if (!token) return false;
+  if (!token) return null;
   const i = token.lastIndexOf('.');
-  if (i < 0) return false;
+  if (i < 0) return null;
   const payload = token.slice(0, i), sig = token.slice(i + 1);
-  if (!safeEqual(sig, sign(payload))) return false;
-  const exp = parseInt(payload.split('.')[1], 10);
-  return Number.isFinite(exp) && exp > Date.now();
+  if (!safeEqual(sig, sign(payload))) return null;
+  const [kind, expStr, , user = ''] = payload.split('.');
+  const exp = parseInt(expStr, 10);
+  if (!Number.isFinite(exp) || exp <= Date.now()) return null;
+  const username = Buffer.from(user, 'base64url').toString();
+  if (kind === 'admin') return { role: 'owner', username: username || ownerUsername() };
+  // A manager's session dies as soon as the account is removed.
+  if (kind === 'manager' && listManagers().some(m => m.username === username)) return { role: 'manager', username };
+  return null;
 }
+function isAdmin(req) { return !!session(req); }
 function sessionCookie(req, value, maxAge) {
   return `admin_session=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${isHttps(req) ? '; Secure' : ''}`;
 }
@@ -153,7 +174,8 @@ route('GET', /^\/api\/survey\/([A-Za-z0-9-]+)\/reports$/, (req, res, m) => {
 
 // Admin: auth
 route('GET', /^\/api\/admin\/status$/, (req, res) => {
-  json(res, 200, { configured: adminConfigured(), loggedIn: isAdmin(req) });
+  const s = session(req);
+  json(res, 200, { configured: adminConfigured(), loggedIn: !!s, role: s ? s.role : null, username: s ? s.username : null });
 });
 route('POST', /^\/api\/admin\/setup$/, async (req, res) => {
   // First-run only: creates the admin account when none exists yet.
@@ -168,10 +190,21 @@ route('POST', /^\/api\/admin\/setup$/, async (req, res) => {
   json(res, 200, { ok: true });
 });
 route('POST', /^\/api\/admin\/password$/, admin(async (req, res) => {
-  if (ENV_ADMIN_PASSWORD) return json(res, 400, { error: 'The password is set by the ADMIN_PASSWORD environment variable. Change it there.' });
+  const s = session(req);
   const body = await readJson(req);
-  if (!checkCredentials(db.getSetting('admin_user', 'admin'), String(body.current || ''))) return json(res, 400, { error: 'Current password is incorrect.' });
   const next = String(body.password || '');
+  if (s.role === 'manager') {
+    // A manager can only change their own password.
+    const list = listManagers();
+    const m = list.find(x => x.username === s.username);
+    if (!m || !checkHash(String(body.current || ''), m.hash)) return json(res, 400, { error: 'Current password is incorrect.' });
+    if (next.length < 8) return json(res, 400, { error: 'New password must be at least 8 characters.' });
+    m.hash = hashPassword(next);
+    saveManagers(list);
+    return json(res, 200, { ok: true });
+  }
+  if (ENV_ADMIN_PASSWORD) return json(res, 400, { error: 'The password is set by the ADMIN_PASSWORD environment variable. Change it there.' });
+  if (!ownerCredentials(db.getSetting('admin_user', 'admin'), String(body.current || ''))) return json(res, 400, { error: 'Current password is incorrect.' });
   if (next.length < 8) return json(res, 400, { error: 'New password must be at least 8 characters.' });
   db.setSetting('admin_password_hash', hashPassword(next));
   json(res, 200, { ok: true });
@@ -179,9 +212,11 @@ route('POST', /^\/api\/admin\/password$/, admin(async (req, res) => {
 route('POST', /^\/api\/admin\/login$/, async (req, res) => {
   if (limited('login:' + clientIp(req), 10, 15 * 60_000)) return json(res, 429, { error: 'Too many login attempts. Try again in 15 minutes.' });
   const body = await readJson(req);
-  if (checkCredentials(String(body.username || ''), String(body.password || ''))) {
-    res.setHeader('Set-Cookie', sessionCookie(req, makeSession(), SESSION_HOURS * 3600));
-    return json(res, 200, { ok: true });
+  const username = String(body.username || '').trim();
+  const role = checkCredentials(username, String(body.password || ''));
+  if (role) {
+    res.setHeader('Set-Cookie', sessionCookie(req, makeSession(role, username), SESSION_HOURS * 3600));
+    return json(res, 200, { ok: true, role });
   }
   json(res, 401, { error: 'Invalid username or password.' });
 });
@@ -190,17 +225,65 @@ route('POST', /^\/api\/admin\/logout$/, (req, res) => {
   json(res, 200, { ok: true });
 });
 
+// Any logged-in account (owner or manager). Handlers that return different data per role call session(req).
 function admin(handler) {
   return (req, res, m) => {
     if (!isAdmin(req)) return json(res, 401, { error: 'Please log in.' });
     return handler(req, res, m);
   };
 }
+// Owner only: everything that changes data, exposes access codes or shows who evaluated whom.
+function owner(handler) {
+  return (req, res, m) => {
+    const s = session(req);
+    if (!s) return json(res, 401, { error: 'Please log in.' });
+    if (s.role !== 'owner') return json(res, 403, { error: 'Only the owner account can do this.' });
+    return handler(req, res, m);
+  };
+}
+
+// Owner: restricted admin accounts.
+route('GET', /^\/api\/admin\/managers$/, owner((req, res) => {
+  json(res, 200, { managers: listManagers().map(m => ({ username: m.username })) });
+}));
+// Creates the account, or sets a new password when the username already exists.
+route('POST', /^\/api\/admin\/managers$/, owner(async (req, res) => {
+  const body = await readJson(req);
+  const username = String(body.username || '').trim();
+  const password = String(body.password || '');
+  if (!MANAGER_USERNAME.test(username)) return json(res, 400, { error: 'Username: 1 to 40 letters, digits, dots, dashes or underscores.' });
+  if (username.toLowerCase() === ownerUsername().toLowerCase()) return json(res, 400, { error: 'This is the owner username.' });
+  if (password.length < 8) return json(res, 400, { error: 'Password must be at least 8 characters.' });
+  const list = listManagers();
+  const existing = list.find(m => m.username === username);
+  if (existing) existing.hash = hashPassword(password); else list.push({ username, hash: hashPassword(password) });
+  saveManagers(list);
+  json(res, 200, { ok: true, replaced: !!existing, managers: list.map(m => ({ username: m.username })) });
+}));
+route('DELETE', /^\/api\/admin\/managers\/([A-Za-z0-9._-]{1,40})$/, owner((req, res, m) => {
+  const list = listManagers();
+  if (!list.some(x => x.username === m[1])) return json(res, 404, { error: 'No such account.' });
+  saveManagers(list.filter(x => x.username !== m[1]));
+  json(res, 200, { ok: true });
+}));
 
 route('GET', /^\/api\/admin\/overview$/, admin((req, res) => {
+  const s = session(req);
+  if (s.role === 'manager') {
+    // Restricted account: no access codes (they would let someone open a colleague's survey) and nothing about who did what.
+    const mailed = db.mailStatus();
+    return json(res, 200, {
+      role: 'manager', username: s.username, orgName: db.getSetting('org_name'),
+      minResponses: parseInt(db.getSetting('min_responses', '3'), 10),
+      baseUrl: baseUrl(req),
+      groups: db.listGroups().map(g => ({ ...g, questions: db.listQuestions(g.id) })),
+      employees: db.listEmployees().map(({ code, ...e }) => ({ ...e, inviteSentAt: mailed.get(`${e.id}:invite`) || null, reportSentAt: mailed.get(`${e.id}:report`) || null })),
+    });
+  }
   const started = new Map(db.participation().map(p => [p.id, p]));
   const mailed = db.mailStatus();
   json(res, 200, {
+    role: 'owner', username: s.username,
     orgName: db.getSetting('org_name'),
     minResponses: parseInt(db.getSetting('min_responses', '3'), 10),
     baseUrl: baseUrl(req),
@@ -209,13 +292,18 @@ route('GET', /^\/api\/admin\/overview$/, admin((req, res) => {
   });
 }));
 // Notification feed: the latest evaluations submitted (who evaluated whom, when).
-route('GET', /^\/api\/admin\/activity$/, admin((req, res) => {
+route('GET', /^\/api\/admin\/activity$/, owner((req, res) => {
   const url = new URL(req.url, 'http://x');
   json(res, 200, db.recentActivity(parseInt(url.searchParams.get('limit') || '30', 10), url.searchParams.get('since') || ''));
 }));
 route('GET', /^\/api\/admin\/results\/([a-z0-9_-]+)$/, admin((req, res, m) => {
   const r = db.results(m[1]);
   if (!r) return json(res, 404, { error: 'Unknown survey.' });
+  if (session(req).role === 'manager') {
+    // Averages only: strip the individual evaluations and their authors.
+    const { evaluators, unattributed, ...rest } = r;
+    return json(res, 200, { ...rest, people: r.people.map(({ evaluations, ...p }) => p) });
+  }
   json(res, 200, r);
 }));
 route('GET', /^\/api\/admin\/results\/([a-z0-9_-]+)\.csv$/, admin((req, res, m) => {
@@ -242,7 +330,7 @@ route('GET', /^\/api\/admin\/results\/([a-z0-9_-]+)\.csv$/, admin((req, res, m) 
   send(res, 200, '﻿' + lines.join('\r\n'), { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="results-${m[1]}.csv"` });
 }));
 // One line per evaluation with its author (confidential: admin only).
-route('GET', /^\/api\/admin\/evaluations\/([a-z0-9_-]+)\.csv$/, admin((req, res, m) => {
+route('GET', /^\/api\/admin\/evaluations\/([a-z0-9_-]+)\.csv$/, owner((req, res, m) => {
   const r = db.results(m[1]);
   if (!r) return json(res, 404, { error: 'Unknown survey.' });
   const sets = Object.keys(r.questionSets).filter(id => id !== r.group.id);
@@ -265,11 +353,11 @@ route('GET', /^\/api\/admin\/reports\/([a-z0-9_-]+)$/, admin((req, res, m) => {
   if (!db.getGroup(m[1])) return json(res, 404, { error: 'Unknown survey.' });
   json(res, 200, { orgName: db.getSetting('org_name'), baseUrl: baseUrl(req), reports: db.allReports(m[1]) });
 }));
-route('POST', /^\/api\/admin\/groups\/([a-z0-9_-]+)\/questions\/restore$/, admin((req, res, m) => {
+route('POST', /^\/api\/admin\/groups\/([a-z0-9_-]+)\/questions\/restore$/, owner((req, res, m) => {
   if (!db.getGroup(m[1])) return json(res, 404, { error: 'Unknown survey.' });
   json(res, 200, seed.restoreDefaultQuestions(m[1]));
 }));
-route('GET', /^\/api\/admin\/links\.csv$/, admin((req, res) => {
+route('GET', /^\/api\/admin\/links\.csv$/, owner((req, res) => {
   const base = baseUrl(req);
   const lines = [['Name', 'Department', 'Role', 'Email', 'Access code', 'Personal link'].join(',')];
   for (const e of db.listEmployees()) lines.push([e.name, e.department, e.role, e.email, db.formatCode(e.code), `${base}/s/${e.code}`].map(csvEscape).join(','));
@@ -277,12 +365,12 @@ route('GET', /^\/api\/admin\/links\.csv$/, admin((req, res) => {
 }));
 
 // Admin: employees
-route('POST', /^\/api\/admin\/employees$/, admin(async (req, res) => {
+route('POST', /^\/api\/admin\/employees$/, owner(async (req, res) => {
   const body = await readJson(req);
   if (!body.name || !body.department) return json(res, 400, { error: 'Name and department are required.' });
   json(res, 200, db.createEmployee({ name: String(body.name), department: String(body.department), role: String(body.role || ''), email: String(body.email || ''), groups: Array.isArray(body.groups) ? body.groups : [], question_set: String(body.question_set || '') }));
 }));
-route('POST', /^\/api\/admin\/employees\/import$/, admin(async (req, res) => {
+route('POST', /^\/api\/admin\/employees\/import$/, owner(async (req, res) => {
   // Two formats, detected from the header row:
   //  - Simple list: Name, Department, Role, Email, Survey   (Survey = staff, ops or staff+ops; header row optional)
   //  - Directory export (Microsoft 365 / Entra / Excel): any column order, matched by header name: "Display name"
@@ -328,23 +416,23 @@ function isOperationsDepartment(department) {
   // Only the "Operators" department (the monitoring operators) takes the ops survey; "Operation(s)" is office staff.
   return /^\s*operators\b/i.test(department || '');
 }
-route('PUT', /^\/api\/admin\/employees\/([a-f0-9-]+)$/, admin(async (req, res, m) => {
+route('PUT', /^\/api\/admin\/employees\/([a-f0-9-]+)$/, owner(async (req, res, m) => {
   const body = await readJson(req);
   const e = db.updateEmployee(m[1], body);
   if (!e) return json(res, 404, { error: 'Not found.' });
   json(res, 200, e);
 }));
-route('DELETE', /^\/api\/admin\/employees\/([a-f0-9-]+)$/, admin((req, res, m) => {
+route('DELETE', /^\/api\/admin\/employees\/([a-f0-9-]+)$/, owner((req, res, m) => {
   json(res, 200, { ok: db.deleteEmployee(m[1]) });
 }));
-route('POST', /^\/api\/admin\/employees\/([a-f0-9-]+)\/regenerate$/, admin((req, res, m) => {
+route('POST', /^\/api\/admin\/employees\/([a-f0-9-]+)\/regenerate$/, owner((req, res, m) => {
   const e = db.regenerateCode(m[1]);
   if (!e) return json(res, 404, { error: 'Not found.' });
   json(res, 200, { ...e, code: db.formatCode(e.code) });
 }));
 
 // Admin: groups, questions, settings
-route('PUT', /^\/api\/admin\/groups\/([a-z0-9_-]+)$/, admin(async (req, res, m) => {
+route('PUT', /^\/api\/admin\/groups\/([a-z0-9_-]+)$/, owner(async (req, res, m) => {
   const body = await readJson(req);
   const fields = {};
   if (typeof body.name === 'string' && body.name.trim()) fields.name = body.name.trim();
@@ -354,7 +442,7 @@ route('PUT', /^\/api\/admin\/groups\/([a-z0-9_-]+)$/, admin(async (req, res, m) 
   if (!g) return json(res, 404, { error: 'Unknown survey.' });
   json(res, 200, g);
 }));
-route('PUT', /^\/api\/admin\/groups\/([a-z0-9_-]+)\/questions$/, admin(async (req, res, m) => {
+route('PUT', /^\/api\/admin\/groups\/([a-z0-9_-]+)\/questions$/, owner(async (req, res, m) => {
   if (!db.getGroup(m[1])) return json(res, 404, { error: 'Unknown survey.' });
   const body = await readJson(req);
   const qs = (Array.isArray(body.questions) ? body.questions : [])
@@ -363,7 +451,7 @@ route('PUT', /^\/api\/admin\/groups\/([a-z0-9_-]+)\/questions$/, admin(async (re
   if (!qs.length) return json(res, 400, { error: 'At least one question is required.' });
   json(res, 200, db.replaceQuestions(m[1], qs));
 }));
-route('PUT', /^\/api\/admin\/settings$/, admin(async (req, res) => {
+route('PUT', /^\/api\/admin\/settings$/, owner(async (req, res) => {
   const body = await readJson(req);
   if (body.minResponses != null) {
     const n = parseInt(body.minResponses, 10);
@@ -373,7 +461,7 @@ route('PUT', /^\/api\/admin\/settings$/, admin(async (req, res) => {
   if (typeof body.orgName === 'string' && body.orgName.trim()) db.setSetting('org_name', body.orgName.trim().slice(0, 100));
   json(res, 200, { ok: true });
 }));
-route('POST', /^\/api\/admin\/demo$/, admin(async (req, res) => {
+route('POST', /^\/api\/admin\/demo$/, owner(async (req, res) => {
   const body = await readJson(req);
   if (body.what === 'employees') seed.loadSampleEmployees();
   else if (body.what === 'responses') seed.loadDemoResponses();
@@ -381,7 +469,7 @@ route('POST', /^\/api\/admin\/demo$/, admin(async (req, res) => {
   else return json(res, 400, { error: 'Unknown demo action.' });
   json(res, 200, { ok: true });
 }));
-route('POST', /^\/api\/admin\/reset$/, admin(async (req, res) => {
+route('POST', /^\/api\/admin\/reset$/, owner(async (req, res) => {
   const body = await readJson(req);
   if (body.what === 'responses') db.resetResponses();
   else if (body.what === 'all') db.resetAll();
@@ -390,7 +478,7 @@ route('POST', /^\/api\/admin\/reset$/, admin(async (req, res) => {
 }));
 
 // Admin: email (personal links and report notices)
-route('GET', /^\/api\/admin\/mail$/, admin((req, res) => {
+route('GET', /^\/api\/admin\/mail$/, owner((req, res) => {
   const counts = {};
   for (const kind of ['invite', 'report']) {
     counts[kind] = { all: 0, unsent: 0, notstarted: 0, blocked: null };
@@ -404,17 +492,17 @@ route('GET', /^\/api\/admin\/mail$/, admin((req, res) => {
     counts, job: mail.jobStatus(), employees: employees.length, withEmail: employees.filter(e => mail.isEmail(e.email)).length,
   });
 }));
-route('PUT', /^\/api\/admin\/mail\/settings$/, admin(async (req, res) => {
+route('PUT', /^\/api\/admin\/mail\/settings$/, owner(async (req, res) => {
   const body = await readJson(req);
   try { mail.saveSettings(body); } catch (e) { return json(res, 400, { error: e.message }); }
   json(res, 200, { ok: true, settings: mail.publicSettings() });
 }));
-route('PUT', /^\/api\/admin\/mail\/templates$/, admin(async (req, res) => {
+route('PUT', /^\/api\/admin\/mail\/templates$/, owner(async (req, res) => {
   const body = await readJson(req);
   try { mail.saveTemplates(body); } catch (e) { return json(res, 400, { error: e.message }); }
   json(res, 200, { ok: true, templates: mail.templates() });
 }));
-route('POST', /^\/api\/admin\/mail\/test$/, admin(async (req, res) => {
+route('POST', /^\/api\/admin\/mail\/test$/, owner(async (req, res) => {
   const body = await readJson(req);
   const to = String(body.to || '').trim();
   if (!mail.isEmail(to)) return json(res, 400, { error: 'Enter a valid email address for the test.' });
@@ -427,24 +515,24 @@ route('POST', /^\/api\/admin\/mail\/test$/, admin(async (req, res) => {
   catch (e) { return json(res, 502, { error: e.message }); }
   json(res, 200, { ok: true });
 }));
-route('GET', /^\/api\/admin\/mail\/preview\/(invite|report)$/, admin((req, res, m) => {
+route('GET', /^\/api\/admin\/mail\/preview\/(invite|report)$/, owner((req, res, m) => {
   // The HTML email as employees will see it, with sample values.
   const sample = { id: 'preview', name: 'Jane Doe', email: 'jane@example.com', code: 'TESTCODE42' };
   const vars = mail.varsFor(sample, baseUrl(req));
   const tpl = mail.templates()[m[1]];
   send(res, 200, mail.htmlEmail(m[1], mail.render(tpl.body, vars), vars), { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
 }));
-route('POST', /^\/api\/admin\/mail\/send$/, admin(async (req, res) => {
+route('POST', /^\/api\/admin\/mail\/send$/, owner(async (req, res) => {
   const body = await readJson(req);
   const kind = ['invite', 'report'].includes(body.kind) ? body.kind : null;
   if (!kind) return json(res, 400, { error: 'Unknown mailing.' });
   try { json(res, 200, mail.startJob(kind, mail.recipients(kind, body.filter, body.ids), baseUrl(req))); }
   catch (e) { json(res, 400, { error: e.message }); }
 }));
-route('GET', /^\/api\/admin\/mail\/status$/, admin((req, res) => json(res, 200, mail.jobStatus())));
+route('GET', /^\/api\/admin\/mail\/status$/, owner((req, res) => json(res, 200, mail.jobStatus())));
 
 // Admin: restart the process (systemd restarts it within seconds; useful after a git pull without root access)
-route('POST', /^\/api\/admin\/restart$/, admin((req, res) => {
+route('POST', /^\/api\/admin\/restart$/, owner((req, res) => {
   if (!process.env.ALLOW_RESTART) return json(res, 400, { error: 'Restart from the admin is disabled (set ALLOW_RESTART=1 in the service environment to enable it).' });
   json(res, 200, { ok: true });
   setTimeout(() => process.exit(0), 300);
