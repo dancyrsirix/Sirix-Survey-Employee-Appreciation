@@ -165,3 +165,31 @@ code { background: var(--soft); padding: 2px 6px; border-radius: 4px; font-size:
   .report table.scores .bar { display: none; }
   .report .head .small { text-align: left !important; }
 }
+
+/* phones: compact admin, no titles */
+@media (max-width: 600px) {
+  body.admin header.top { padding: 8px 0; border-bottom-width: 4px; }
+  body.admin header.top h1 { display: none; }
+  body.admin header.top .wrap { justify-content: flex-end; align-items: center; }
+  body.admin header.top .sub { font-size: 12px; }
+  body.admin main.wrap { padding: 8px 8px 40px; }
+  body.admin .tabs { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -8px 10px; padding: 0 8px; scrollbar-width: none; }
+  body.admin .tabs::-webkit-scrollbar { display: none; }
+  body.admin .tabs button { white-space: nowrap; padding: 8px 10px; font-size: 13px; }
+  body.admin .card { padding: 10px; margin-bottom: 10px; border-radius: 8px; }
+  body.admin .card h2 { display: none; }
+  body.admin .card > p.muted.small, body.admin .detail > p.muted.small { display: none; }
+  body.admin .row { gap: 6px; }
+  body.admin .row > select, body.admin .row > input { flex: 1 1 45%; padding: 7px 8px; font-size: 13px; }
+  body.admin .row > button, body.admin .row > a.btn, body.admin .actions > button, body.admin .actions > a.btn { padding: 7px 10px; font-size: 13px; }
+  body.admin .stats { grid-template-columns: repeat(2, 1fr); gap: 6px; }
+  body.admin .stat { padding: 8px 10px; }
+  body.admin .stat .v { font-size: 18px; }
+  body.admin table { font-size: 13px; }
+  body.admin th, body.admin td { padding: 6px 4px; }
+  body.admin td .small.muted { display: none; }
+  body.admin .score { min-width: 36px; padding: 1px 4px; }
+  body.admin .table-wrap { margin: 0 -10px; padding: 0 10px; }
+  body.admin .detail { padding: 8px; }
+  body.admin .notif .panel { position: fixed; left: 8px; right: 8px; top: 56px; width: auto; max-width: none; }
+}
