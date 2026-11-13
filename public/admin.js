@@ -413,7 +413,7 @@
       const body = h('textarea', { style: 'min-height:230px;font-family:inherit' }, t.body);
       return h('div', { class: 'card' },
         h('h2', null, kind === 'invite' ? 'Email 1: personal link (survey invitation)' : 'Email 2: report available'),
-        h('p', { class: 'muted small' }, 'Placeholders: ', m.placeholders.map(x => h('code', { style: 'margin-right:6px' }, x)), ' · {first_name} is the first word of the name · {link} is required. Employees receive a Sirix-style HTML email built from this text (the line with {link} becomes a button, the line with {code} a highlighted box, lines starting with "- " a list), plus a plain-text copy.'),
+        h('p', { class: 'muted small' }, 'Placeholders: ', m.placeholders.map(x => h('code', { style: 'margin-right:6px' }, x)), ' · {first_name} is the first word of the name · {link} is required · {signature} is the sender’s signature (plain text here, a styled block in the HTML email). Employees receive a Sirix-style HTML email built from this text (the line with {link} becomes a button, the line with {code} a highlighted box, lines starting with "- " a list), plus a plain-text copy.'),
         ...field('Subject', subj), ...field('Message (plain text)', body),
         h('div', { class: 'actions' },
           h('button', { onclick: async () => { try { await api('PUT', '/api/admin/mail/templates', { [kind]: { subject: subj.value, body: body.value } }); toast('Template saved'); } catch (ex) { toast(ex.message, 'error'); } } }, 'Save template'),

@@ -326,8 +326,16 @@ test('email: settings, templates, sending personal links through a fake transpor
   assert.match(h, /<li[^>]*>Answers are anonymous/);
   assert.match(h, new RegExp(`>${db.formatCode(emps[0].code)}<`));
   assert.ok(!h.includes('{link}'));
-  assert.match(h, /border-left:3px solid #5fd0b0;[^]*?<div style="font-weight:700;[^"]*">Daniel Cyr<\/div>/, 'signature block');
-  assert.match(h, /President and CEO/);
+  // {signature}: plain text in the text part, styled block in the HTML part
+  const txt = mail.render(mail.DEFAULT_TEMPLATES.invite.body, vars);
+  assert.ok(txt.includes('Daniel Cyr\nPresident / CEO\n\nSirix - Remote Live Monitoring\nT: 1-866-765-6667 x1012 | dan@sirixmonitoring.com'));
+  assert.ok(!txt.includes('{signature}'));
+  assert.match(h, /color:#5fd0b0;">Daniel Cyr<\/span>/);
+  assert.match(h, /Sirix<\/span> - Remote Live Monitoring/);
+  assert.match(h, /<a href="mailto:dan@sirixmonitoring\.com"/);
+  assert.match(h, /<a href="https:\/\/www\.sirixmonitoring\.com"/);
+  assert.ok(!h.includes('signature\u0000'), 'marker never leaks');
+  assert.equal((h.match(/Daniel Cyr/g) || []).length, 1, 'signature rendered once');
   const prev = await http('GET', '/api/admin/mail/preview/report');
   assert.equal(prev.status, 200);
   assert.match(prev.text, /See my report/);
