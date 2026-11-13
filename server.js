@@ -103,7 +103,7 @@ function checkHash(password, stored) { const [salt] = String(stored).split(':');
 function checkCredentials(username, password) {
   if (ownerCredentials(username, password)) return 'owner';
   const m = listManagers().find(x => safeEqual(x.username, username));
-  return m && checkHash(password, m.hash) ? 'manager' : null;
+  return m && m.hash && checkHash(password, m.hash) ? 'manager' : null;
 }
 
 // ---------- admin sessions (signed cookie) ----------
@@ -244,22 +244,59 @@ function owner(handler) {
 
 // Owner: restricted admin accounts.
 route('GET', /^\/api\/admin\/managers$/, owner((req, res) => {
-  json(res, 200, { managers: listManagers().map(m => ({ username: m.username })) });
+  json(res, 200, { managers: managerList() });
 }));
-// Creates the account, or sets a new password when the username already exists.
+// Creates the account, or sets a new password when the username already exists. Without a password, a one-time
+// setup link is issued instead (valid 7 days): the person opens it and chooses their own password. An existing
+// password keeps working until the link is used.
+const SETUP_LINK_DAYS = 7;
 route('POST', /^\/api\/admin\/managers$/, owner(async (req, res) => {
   const body = await readJson(req);
   const username = String(body.username || '').trim();
   const password = String(body.password || '');
   if (!MANAGER_USERNAME.test(username)) return json(res, 400, { error: 'Username: 1 to 40 letters, digits, dots, dashes or underscores.' });
   if (username.toLowerCase() === ownerUsername().toLowerCase()) return json(res, 400, { error: 'This is the owner username.' });
-  if (password.length < 8) return json(res, 400, { error: 'Password must be at least 8 characters.' });
+  if (password && password.length < 8) return json(res, 400, { error: 'Password must be at least 8 characters.' });
   const list = listManagers();
-  const existing = list.find(m => m.username === username);
-  if (existing) existing.hash = hashPassword(password); else list.push({ username, hash: hashPassword(password) });
+  let m = list.find(x => x.username === username);
+  const replaced = !!m;
+  if (!m) { m = { username, hash: null }; list.push(m); }
+  let setupLink = null;
+  if (password) { m.hash = hashPassword(password); delete m.setupToken; delete m.setupExpires; }
+  else {
+    m.setupToken = crypto.randomBytes(24).toString('base64url');
+    m.setupExpires = Date.now() + SETUP_LINK_DAYS * 86400_000;
+    setupLink = `${baseUrl(req)}/admin?setup=${m.setupToken}`;
+  }
   saveManagers(list);
-  json(res, 200, { ok: true, replaced: !!existing, managers: list.map(m => ({ username: m.username })) });
+  json(res, 200, { ok: true, replaced, setupLink, setupExpires: m.setupExpires || null, managers: managerList() });
 }));
+function managerList() { return listManagers().map(m => ({ username: m.username, pending: !m.hash, linkExpires: m.setupToken && m.setupExpires > Date.now() ? new Date(m.setupExpires).toISOString() : null })); }
+// Public: the setup link. GET tells the page whose link it is; POST sets the password and logs the person in.
+function managerBySetupToken(token) {
+  const m = listManagers().find(x => x.setupToken && safeEqual(x.setupToken, token));
+  return m && m.setupExpires > Date.now() ? m : null;
+}
+route('GET', /^\/api\/admin\/manager-setup\/([A-Za-z0-9_-]{20,80})$/, (req, res, m) => {
+  if (limited('setup:' + clientIp(req), 20, 60_000)) return json(res, 429, { error: 'Too many attempts. Wait a minute.' });
+  const acct = managerBySetupToken(m[1]);
+  if (!acct) return json(res, 404, { error: 'This link is not valid anymore. Ask for a new one.' });
+  json(res, 200, { username: acct.username, orgName: db.getSetting('org_name') });
+});
+route('POST', /^\/api\/admin\/manager-setup\/([A-Za-z0-9_-]{20,80})$/, async (req, res, m) => {
+  if (limited('setup:' + clientIp(req), 20, 60_000)) return json(res, 429, { error: 'Too many attempts. Wait a minute.' });
+  const list = listManagers();
+  const acct = list.find(x => x.setupToken && safeEqual(x.setupToken, m[1]) && x.setupExpires > Date.now());
+  if (!acct) return json(res, 404, { error: 'This link is not valid anymore. Ask for a new one.' });
+  const body = await readJson(req);
+  const password = String(body.password || '');
+  if (password.length < 8) return json(res, 400, { error: 'Choose a password of at least 8 characters.' });
+  acct.hash = hashPassword(password);
+  delete acct.setupToken; delete acct.setupExpires;
+  saveManagers(list);
+  res.setHeader('Set-Cookie', sessionCookie(req, makeSession('manager', acct.username), SESSION_HOURS * 3600));
+  json(res, 200, { ok: true, username: acct.username });
+});
 route('DELETE', /^\/api\/admin\/managers\/([A-Za-z0-9._-]{1,40})$/, owner((req, res, m) => {
   const list = listManagers();
   if (!list.some(x => x.username === m[1])) return json(res, 404, { error: 'No such account.' });
@@ -595,4 +632,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { server };
+module.exports = { server, resetLimits: () => buckets.clear() }; // resetLimits: for tests

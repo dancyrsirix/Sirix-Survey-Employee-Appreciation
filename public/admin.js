@@ -63,6 +63,29 @@
       form));
   }
 
+  // One-time setup link (/admin?setup=TOKEN): the person chooses their password, then lands in the admin.
+  async function renderSetup(token) {
+    document.getElementById('hdr-right').textContent = '';
+    let info;
+    try { info = await api('GET', '/api/admin/manager-setup/' + encodeURIComponent(token)); }
+    catch (ex) {
+      return app.replaceChildren(h('div', { class: 'card login' }, h('h2', null, 'Link not valid'), h('p', null, ex.message), h('p', { class: 'small' }, h('a', { href: '/admin' }, 'Go to the login page'))));
+    }
+    const err = h('div', { class: 'alert error', style: 'display:none' });
+    const pass = h('input', { type: 'password', autocomplete: 'new-password' });
+    const pass2 = h('input', { type: 'password', autocomplete: 'new-password' });
+    const form = h('form', { onsubmit: async (e) => {
+      e.preventDefault();
+      if (pass.value !== pass2.value) { err.textContent = 'Passwords do not match.'; err.style.display = 'block'; return; }
+      try { await api('POST', '/api/admin/manager-setup/' + encodeURIComponent(token), { password: pass.value }); history.replaceState(null, '', '/admin'); await loadOverview(); render(); }
+      catch (ex) { err.textContent = ex.message; err.style.display = 'block'; }
+    } }, h('label', null, 'Username'), h('input', { type: 'text', value: info.username, readonly: true, autocomplete: 'username' }),
+      h('label', null, 'Choose a password (at least 8 characters)'), pass, h('label', null, 'Confirm password'), pass2, err,
+      h('div', { class: 'actions' }, h('button', { type: 'submit' }, 'Save and open the results')));
+    app.replaceChildren(h('div', { class: 'card login' }, h('h2', null, 'Welcome to the ' + info.orgName + ' survey results'),
+      h('p', { class: 'muted small' }, 'Choose the password you will use to log in at ' + location.origin + '/admin. Only a hashed version is stored.'), form));
+  }
+
   async function loadOverview() {
     ov = await api('GET', '/api/admin/overview');
     if (!resultsGroup || !ov.groups.find(g => g.id === resultsGroup)) resultsGroup = ov.groups[0] && ov.groups[0].id;
@@ -467,20 +490,33 @@
     const load = async () => {
       try {
         const r = await api('GET', '/api/admin/managers');
-        list.replaceChildren(r.managers.length ? h('table', null, h('tbody', null, r.managers.map(m => h('tr', null, h('td', null, h('b', null, m.username)),
-          h('td', { style: 'text-align:right' }, h('button', { class: 'secondary small', style: 'padding:4px 8px', onclick: () => { user.value = m.username; pass.value = ''; pass.focus(); toast('Enter a new password and click Save to reset it'); } }, 'Reset password'), ' ',
+        list.replaceChildren(r.managers.length ? h('table', null, h('tbody', null, r.managers.map(m => h('tr', null, h('td', null, h('b', null, m.username), m.pending ? [' ', h('span', { class: 'pill closed', title: 'No password yet: the setup link has not been used' }, 'link not used yet')] : null, m.linkExpires ? h('div', { class: 'small muted' }, 'Setup link valid until ' + fmtDate(m.linkExpires)) : null),
+          h('td', { style: 'text-align:right' }, h('button', { class: 'secondary small', style: 'padding:4px 8px', title: 'Issue a new one-time link on which this person chooses a password', onclick: () => issueLink(m.username) }, 'New link'), ' ',
+            h('button', { class: 'secondary small', style: 'padding:4px 8px', onclick: () => { user.value = m.username; pass.value = ''; pass.focus(); toast('Enter a new password and click Save to reset it'); } }, 'Set password'), ' ',
             h('button', { class: 'danger small', style: 'padding:4px 8px', onclick: async () => { if (!confirm(`Remove the account ${m.username}? They will be logged out at once.`)) return; try { await api('DELETE', '/api/admin/managers/' + encodeURIComponent(m.username)); toast('Account removed'); load(); } catch (ex) { toast(ex.message, 'error'); } } }, 'Remove'))))))
           : h('p', { class: 'muted small' }, 'No restricted account yet.'));
       } catch (ex) { list.replaceChildren(h('p', { class: 'alert error' }, ex.message)); }
     };
+    const linkBox = h('div', { style: 'display:none' });
+    const showLink = (username, r) => {
+      const inp = h('input', { type: 'text', readonly: true, value: r.setupLink, onclick: e => e.target.select() });
+      linkBox.style.display = '';
+      linkBox.replaceChildren(h('div', { class: 'alert info' }, h('b', null, 'Setup link for ' + username), ' (valid until ' + fmtDate(r.setupExpires) + ', one use). Send it to them: they open it, choose their password and land in the results.',
+        h('div', { class: 'row', style: 'margin-top:8px' }, inp, h('button', { class: 'secondary', onclick: () => { navigator.clipboard.writeText(r.setupLink); toast('Link copied'); } }, 'Copy'))));
+    };
+    const issueLink = async (username) => {
+      try { const r = await api('POST', '/api/admin/managers', { username }); showLink(username, r); toast(r.replaced ? 'New link issued' : 'Account created'); load(); }
+      catch (ex) { toast(ex.message, 'error'); }
+    };
     load();
     return h('div', { class: 'card' }, h('h2', null, 'Restricted admin accounts (averages only)'),
       h('p', { class: 'muted small' }, 'These accounts log in on this same page and see the Results (averages by department and by person), the individual reports and the employee list. They never see who evaluated whom, the individual evaluations, the personal links or the notification bell, and they cannot change anything. Each person can change their own password.'),
-      list,
-      h('div', { class: 'row' }, h('div', { style: 'flex:1' }, h('label', null, 'Username'), user), h('div', { style: 'flex:1' }, h('label', null, 'Password'), pass)),
+      list, linkBox,
+      h('div', { class: 'row' }, h('div', { style: 'flex:1' }, h('label', null, 'Username'), user), h('div', { style: 'flex:1' }, h('label', null, 'Password (leave empty to send a setup link instead)'), pass)),
       h('div', { class: 'actions' }, h('button', { onclick: async () => {
-        try { const r = await api('POST', '/api/admin/managers', { username: user.value, password: pass.value }); toast(r.replaced ? 'Password reset' : 'Account created'); user.value = pass.value = ''; load(); } catch (ex) { toast(ex.message, 'error'); }
-      } }, 'Save account')));
+        if (!pass.value) return issueLink(user.value.trim());
+        try { const r = await api('POST', '/api/admin/managers', { username: user.value, password: pass.value }); toast(r.replaced ? 'Password set' : 'Account created'); user.value = pass.value = ''; load(); } catch (ex) { toast(ex.message, 'error'); }
+      } }, 'Save account'), h('button', { class: 'secondary', title: 'Creates the account and gives you a one-time link on which the person chooses their own password', onclick: () => issueLink(user.value.trim()) }, 'Create with a setup link')));
   }
 
   // ---------- email ----------
@@ -587,5 +623,9 @@
   }
 
   // ---------- boot ----------
-  (async () => { try { await loadOverview(); render(); } catch { renderLogin(); } })();
+  (async () => {
+    const setupToken = new URLSearchParams(location.search).get('setup');
+    if (setupToken) return renderSetup(setupToken);
+    try { await loadOverview(); render(); } catch { renderLogin(); }
+  })();
 })();

@@ -12,7 +12,7 @@ process.env.MAIL_PAUSE_MS = '0';
 delete process.env.SMTP_HOST;
 delete process.env.ADMIN_PASSWORD;
 
-const { server } = require('../server');
+const { server, resetLimits } = require('../server');
 const db = require('../lib/db');
 const seed = require('../lib/seed');
 const mail = require('../lib/mail');
@@ -564,7 +564,7 @@ test('a restricted admin account sees averages only, never who evaluated whom, a
   assert.equal(r.status, 200);
   assert.equal(r.json.replaced, false);
   r = await http('GET', '/api/admin/managers');
-  assert.deepEqual(r.json.managers, [{ username: 'jon' }]);
+  assert.deepEqual(r.json.managers, [{ username: 'jon', pending: false, linkExpires: null }]);
   assert.doesNotMatch(db.getSetting('admin_managers'), /manager-pass-1/);
 
   // The manager logs in on the same endpoint and gets the manager role.
@@ -629,6 +629,42 @@ test('a restricted admin account sees averages only, never who evaluated whom, a
   assert.equal((await http('DELETE', '/api/admin/managers/jon')).status, 404);
   assert.equal((await http('GET', '/api/admin/overview', null, { cookie: jon })).status, 401);
   assert.equal((await http('POST', '/api/admin/login', { username: 'jon', password: 'manager-pass-3' })).status, 401);
+});
+
+test('a restricted account can be created with a one-time setup link on which the person chooses the password', async () => {
+  resetLimits(); // the login limiter (per IP) would otherwise trip after the earlier tests
+  // Owner issues the link (no password given); the account exists but cannot log in yet.
+  let r = await http('POST', '/api/admin/managers', { username: 'mat' });
+  assert.equal(r.status, 200);
+  assert.match(r.json.setupLink, /\/admin\?setup=[A-Za-z0-9_-]{20,}$/);
+  const token = r.json.setupLink.split('setup=')[1];
+  r = await http('GET', '/api/admin/managers');
+  assert.deepEqual(r.json.managers.map(m => [m.username, m.pending, !!m.linkExpires]), [['mat', true, true]]);
+  assert.equal((await http('POST', '/api/admin/login', { username: 'mat', password: '' })).status, 401);
+  // Unauthenticated: the link tells whose it is, refuses short passwords and bad tokens.
+  r = await http('GET', '/api/admin/manager-setup/' + token, null, { cookie: '' });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.username, 'mat');
+  assert.equal((await http('GET', '/api/admin/manager-setup/' + token.slice(0, -1) + 'x', null, { cookie: '' })).status, 404);
+  assert.equal((await http('POST', '/api/admin/manager-setup/' + token, { password: 'short' }, { cookie: '' })).status, 400);
+  r = await http('POST', '/api/admin/manager-setup/' + token, { password: 'mat-pass-1234' }, { cookie: '' });
+  assert.equal(r.status, 200);
+  const mat = r.headers.get('set-cookie').split(';')[0];
+  r = await http('GET', '/api/admin/status', null, { cookie: mat });
+  assert.deepEqual([r.json.role, r.json.username], ['manager', 'mat']);
+  // The link is single use; the password now works; the account is no longer pending.
+  assert.equal((await http('GET', '/api/admin/manager-setup/' + token, null, { cookie: '' })).status, 404);
+  assert.equal((await http('POST', '/api/admin/login', { username: 'mat', password: 'mat-pass-1234' })).status, 200);
+  assert.deepEqual((await http('GET', '/api/admin/managers')).json.managers.map(m => [m.username, m.pending, m.linkExpires]), [['mat', false, null]]);
+  // A new link for an existing account keeps the old password working until it is used.
+  r = await http('POST', '/api/admin/managers', { username: 'mat' });
+  assert.equal(r.json.replaced, true);
+  assert.equal((await http('POST', '/api/admin/login', { username: 'mat', password: 'mat-pass-1234' })).status, 200);
+  const token2 = r.json.setupLink.split('setup=')[1];
+  assert.equal((await http('POST', '/api/admin/manager-setup/' + token2, { password: 'mat-pass-5678' }, { cookie: '' })).status, 200);
+  assert.equal((await http('POST', '/api/admin/login', { username: 'mat', password: 'mat-pass-1234' })).status, 401);
+  assert.equal((await http('POST', '/api/admin/login', { username: 'mat', password: 'mat-pass-5678' })).status, 200);
+  assert.equal((await http('DELETE', '/api/admin/managers/mat')).status, 200);
 });
 
 test('logout clears the session', async () => {
