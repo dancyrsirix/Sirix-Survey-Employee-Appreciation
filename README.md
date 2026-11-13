@@ -14,7 +14,7 @@ No npm dependencies: it runs on Node.js 22+ with the built-in SQLite database.
 - **The 5 statements** (editable in the admin). Office staff and management: Reliability and follow-up, Responsiveness and communication, Availability and collaboration, People skills, Quality of work. Operations: Reliability on shift, Shift communication and handovers, Availability and collaboration, People skills, Event handling. A person who is not an operator but is evaluated in the operations survey (a manager, a technician) can be set, in the Employees tab, to always be evaluated with the office staff statements.
 - **Built-in email**: send every employee their personal link, and later the "your report is available" notice, straight from the admin through any SMTP mailbox. Editable templates, per-person status, progress bar, failures listed by name. No mail merge needed.
 - **Personal reports**: when you release the results, each employee sees their own report on their personal link: average per category next to the department and company averages, a "point fort", a priority to work on, and the constructive comments received. Reports can also be printed or saved as PDF from the admin.
-- **Admin dashboard** (`/admin`): results by department and by person, written comments, CSV export, employee list with personal links, question editor, open/close/release each survey, sample data loader.
+- **Admin dashboard** (`/admin`): results by department and by person, every evaluation with its author, notification bell for new evaluations, CSV exports, employee list with personal links, question editor, open/close/release each survey, sample data loader.
 
 ## Who sees what
 

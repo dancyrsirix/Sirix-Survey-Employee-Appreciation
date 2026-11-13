@@ -7,6 +7,13 @@
   let expanded = new Set();
   let resultsCache = {};
   let mailPoll = null;     // timer polling the mailing progress
+  let notifPoll = null;    // timer polling the activity feed
+  let notifLastPoll = '';  // server time of the last poll (to toast new arrivals)
+  let notifOpen = false;
+  let notifItems = [];
+  const SEEN_KEY = 'survey_admin_notif_seen';
+  const getSeen = () => { try { return localStorage.getItem(SEEN_KEY) || ''; } catch { return ''; } };
+  const setSeen = v => { try { localStorage.setItem(SEEN_KEY, v); } catch {} };
 
   function h(tag, attrs, ...children) {
     const el = document.createElement(tag);
@@ -57,8 +64,44 @@
   async function loadOverview() {
     ov = await api('GET', '/api/admin/overview');
     if (!resultsGroup || !ov.groups.find(g => g.id === resultsGroup)) resultsGroup = ov.groups[0] && ov.groups[0].id;
-    document.getElementById('hdr-right').replaceChildren(ov.orgName + ' · ', h('button', { class: 'link', style: 'color:#fff', onclick: async () => { await api('POST', '/api/admin/logout'); renderLogin(); } }, 'Log out'));
+    document.getElementById('hdr-right').replaceChildren(h('span', { class: 'hdr-row' }, ov.orgName + ' · ', h('span', { id: 'notif' }), h('button', { class: 'link', style: 'color:#fff', onclick: async () => { stopNotifPoll(); await api('POST', '/api/admin/logout'); renderLogin(); } }, 'Log out')));
+    startNotifPoll();
   }
+
+  // ---------- notifications (top right): latest evaluations submitted ----------
+  function ago(iso) {
+    const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+    if (s < 60) return 'just now';
+    if (s < 3600) return Math.floor(s / 60) + ' min ago';
+    if (s < 86400) return Math.floor(s / 3600) + ' h ago';
+    return new Date(iso).toLocaleDateString();
+  }
+  function drawNotif() {
+    const slot = document.getElementById('notif');
+    if (!slot) return;
+    const seen = getSeen();
+    const unseen = notifItems.filter(i => i.at > seen).length;
+    const list = notifItems.length ? h('ul', null, notifItems.map(i => h('li', { class: i.at > seen ? 'new' : '', onclick: () => {
+      notifOpen = false; tab = 'results'; resultsGroup = i.groupId; resultsDept = ''; expanded = new Set([i.targetId]); delete resultsCache[i.groupId]; render(); drawNotif();
+    } }, h('b', null, i.evaluator), ' evaluated ', h('b', null, i.target), h('div', { class: 'small muted' }, (i.groupName || i.groupId) + ' · ' + ago(i.at))))) : h('p', { class: 'muted small', style: 'margin:0' }, 'No evaluations yet.');
+    slot.replaceChildren(h('span', { class: 'notif' + (notifOpen ? ' open' : '') },
+      h('button', { class: 'bell', title: unseen ? unseen + ' new evaluation(s)' : 'Latest evaluations', onclick: (e) => { e.stopPropagation(); notifOpen = !notifOpen; if (notifOpen && notifItems.length) setSeen(notifItems[0].at); drawNotif(); } },
+        '\u{1F514}', unseen ? h('span', { class: 'badge' }, unseen > 99 ? '99+' : unseen) : null),
+      notifOpen ? h('div', { class: 'panel', onclick: e => e.stopPropagation() }, h('div', { class: 'panel-head' }, 'Latest evaluations', h('button', { class: 'link small', onclick: () => { notifOpen = false; drawNotif(); } }, 'Close')), list) : null));
+  }
+  async function pollNotif() {
+    try {
+      const r = await api('GET', '/api/admin/activity?limit=30' + (notifLastPoll ? '&since=' + encodeURIComponent(notifLastPoll) : ''));
+      if (notifLastPoll && r.newSince > 0) {
+        toast(r.newSince === 1 ? `New evaluation: ${r.items[0].evaluator} evaluated ${r.items[0].target}` : `${r.newSince} new evaluations submitted`);
+        resultsCache = {};
+      }
+      notifLastPoll = r.now; notifItems = r.items; drawNotif();
+    } catch { /* logged out or offline: the next poll will retry */ }
+  }
+  function startNotifPoll() { stopNotifPoll(); pollNotif(); notifPoll = setInterval(pollNotif, 30000); }
+  function stopNotifPoll() { if (notifPoll) { clearInterval(notifPoll); notifPoll = null; } }
+  document.addEventListener('click', () => { if (notifOpen) { notifOpen = false; drawNotif(); } });
 
   // ---------- layout ----------
   function render() {

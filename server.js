@@ -208,6 +208,11 @@ route('GET', /^\/api\/admin\/overview$/, admin((req, res) => {
     employees: db.listEmployees().map(e => ({ ...e, code: db.formatCode(e.code), started: !!(started.get(e.id) || {}).started, evaluated: (started.get(e.id) || {}).evaluated || 0, inviteSentAt: mailed.get(`${e.id}:invite`) || null, reportSentAt: mailed.get(`${e.id}:report`) || null })),
   });
 }));
+// Notification feed: the latest evaluations submitted (who evaluated whom, when).
+route('GET', /^\/api\/admin\/activity$/, admin((req, res) => {
+  const url = new URL(req.url, 'http://x');
+  json(res, 200, db.recentActivity(parseInt(url.searchParams.get('limit') || '30', 10), url.searchParams.get('since') || ''));
+}));
 route('GET', /^\/api\/admin\/results\/([a-z0-9_-]+)$/, admin((req, res, m) => {
   const r = db.results(m[1]);
   if (!r) return json(res, 404, { error: 'Unknown survey.' });

@@ -141,6 +141,16 @@ test('each evaluation is stored with its author, shown to the admin only', async
   assert.equal(pc.evaluations.length, 1);
   assert.equal(pc.evaluations[0].evaluator, null);
   assert.equal(r2.unattributed, 1);
+  // activity feed for the admin's notification bell: newest first, timestamped rows only
+  const act = (await http('GET', '/api/admin/activity')).json;
+  assert.equal(act.items.length, 1);
+  assert.equal(act.items[0].evaluator, alice.name);
+  assert.equal(act.items[0].target, bob.name);
+  assert.equal(act.items[0].groupId, 'staff');
+  assert.match(act.items[0].at, /^\d{4}-\d{2}-\d{2}T/);
+  assert.equal(act.newSince, 1);
+  assert.equal((await http('GET', '/api/admin/activity?since=' + encodeURIComponent(act.now))).json.newSince, 0);
+  assert.equal((await http('GET', '/api/admin/activity?since=2000-01-01T00:00:00.000Z')).json.newSince, 1);
   // CSV with one line per evaluation
   const csv = await http('GET', '/api/admin/evaluations/staff.csv');
   assert.equal(csv.status, 200);
