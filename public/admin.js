@@ -109,7 +109,7 @@
   // ---------- layout ----------
   function render() {
     const tabs = isOwner()
-      ? [['results', 'Results'], ['reports', 'Individual reports'], ['employees', 'Employees & links'], ['email', 'Email'], ['questions', 'Surveys & questions'], ['settings', 'Settings & demo data']]
+      ? [['results', 'Results'], ['ranking', 'Ranking'], ['reports', 'Individual reports'], ['employees', 'Employees & links'], ['email', 'Email'], ['questions', 'Surveys & questions'], ['settings', 'Settings & demo data']]
       : [['results', 'Results'], ['reports', 'Individual reports'], ['employees', 'Employees'], ['settings', 'Settings']];
     if (!tabs.some(([id]) => id === tab)) tab = 'results';
     stopMailPoll();
@@ -117,7 +117,7 @@
       h('div', { class: 'tabs' }, tabs.map(([id, label]) => h('button', { class: id === tab ? 'active' : '', onclick: () => { tab = id; render(); } }, label))),
       h('div', { id: 'tab' }, h('p', { class: 'muted' }, 'Loading...')),
     );
-    ({ results: renderResults, reports: renderReports, employees: renderEmployees, email: renderEmail, questions: renderQuestions, settings: renderSettings })[tab]();
+    ({ results: renderResults, ranking: renderRanking, reports: renderReports, employees: renderEmployees, email: renderEmail, questions: renderQuestions, settings: renderSettings })[tab]();
   }
   const setTab = (...nodes) => document.getElementById('tab').replaceChildren(...nodes);
 
@@ -212,6 +212,54 @@
           h('tbody', null, r.evaluators.map(ev => h('tr', null,
             h('td', null, h('b', null, ev.name)), h('td', { class: 'num' }, ev.targets.length),
             h('td', { class: 'small' }, ev.targets.map((t, i) => [i ? ', ' : '', t.name, t.attribution === 'deduced' ? h('span', { class: 'pill todo', style: 'margin-left:3px;font-size:10px;padding:0 5px' }, 'deduced') : null, t.overall == null ? '' : [' ', h('span', { class: scoreClass(t.overall) }, fmt(t.overall))]]))))))) : h('p', { class: 'muted small' }, 'No named evaluations yet.')),
+    );
+  }
+
+  // ---------- ranking (owner): people ordered by their average score ----------
+  let rankBy = 'overall';
+  let rankMin = 3;         // evaluations needed to appear in the ranking (independent of the global minimum)
+  async function renderRanking() {
+    if (!resultsGroup) return setTab(h('div', { class: 'card' }, 'No surveys configured.'));
+    const r = resultsCache[resultsGroup] || (resultsCache[resultsGroup] = await api('GET', '/api/admin/results/' + resultsGroup));
+    const ratingQs = r.questions.filter(q => q.type === 'rating');
+    if (rankBy !== 'overall' && !ratingQs.some(q => q.id === rankBy)) rankBy = 'overall';
+    const depts = [...new Set(r.people.map(p => p.department))].sort();
+    const setName = id => (ov.groups.find(g => g.id === id) || { name: id }).name;
+    const score = p => rankBy === 'overall' ? p.overall : (p.ratings[rankBy] ? p.ratings[rankBy].avg : null);
+    const people = r.people.filter(p => !resultsDept || p.department === resultsDept);
+    const need = Math.max(rankMin, r.minResponses);
+    const ranked = people.filter(p => p.visible && p.responses >= need && score(p) != null).sort((a, b) => score(b) - score(a) || b.responses - a.responses || a.name.localeCompare(b.name));
+    const pending = people.filter(p => !(p.visible && p.responses >= need && score(p) != null)).sort((a, b) => b.responses - a.responses || a.name.localeCompare(b.name));
+    const rankLabel = rankBy === 'overall' ? 'overall average' : (ratingQs.find(q => q.id === rankBy) || {}).category || 'this statement';
+    const controls = h('div', { class: 'row' },
+      h('select', { onchange: (e) => { resultsGroup = e.target.value; resultsDept = ''; renderRanking(); } }, ov.groups.map(g => h('option', { value: g.id, selected: g.id === resultsGroup }, g.name))),
+      h('select', { onchange: (e) => { resultsDept = e.target.value; renderRanking(); } }, h('option', { value: '' }, 'All departments'), depts.map(d => h('option', { value: d, selected: d === resultsDept }, d))),
+      h('select', { onchange: (e) => { rankBy = e.target.value; renderRanking(); } }, h('option', { value: 'overall', selected: rankBy === 'overall' }, 'Rank by: overall average'), ratingQs.map((q, i) => h('option', { value: q.id, selected: rankBy === q.id }, 'Rank by: ' + (q.category || 'Q' + (i + 1))))),
+      h('select', { onchange: (e) => { rankMin = parseInt(e.target.value, 10); renderRanking(); } }, [1, 2, 3, 5, 8, 10].map(n => h('option', { value: n, selected: n === rankMin }, `At least ${n} evaluation${n > 1 ? 's' : ''}`))),
+      h('button', { class: 'secondary', onclick: () => { delete resultsCache[resultsGroup]; renderRanking(); } }, 'Refresh'));
+    let rank = 0, prev = null, shown = 0;
+    const rows = ranked.map(p => {
+      shown++; const sc = score(p); if (prev == null || Math.abs(sc - prev) > 1e-9) rank = shown; prev = sc;
+      const medal = rank === 1 ? '\u{1F947}' : rank === 2 ? '\u{1F948}' : rank === 3 ? '\u{1F949}' : '';
+      const ownSet = !p.questionSet || p.questionSet === r.group.id;
+      return h('tr', { class: rank <= 3 ? 'top' : '' },
+        h('td', { class: 'num' }, h('b', null, rank), medal ? ' ' + medal : ''),
+        h('td', null, h('b', null, p.name), h('div', { class: 'small muted' }, [p.role, p.department].filter(Boolean).join(' · ')), ownSet ? null : h('div', { class: 'small muted' }, 'Evaluated with the statements of: ' + setName(p.questionSet))),
+        h('td', { class: 'num' }, p.responses),
+        h('td', { class: 'num' }, h('span', { class: scoreClass(sc) }, fmt(sc))),
+        ratingQs.map(q => h('td', { class: 'num' + (q.id === rankBy ? ' rank-col' : '') }, p.ratings[q.id] ? h('span', { class: scoreClass(p.ratings[q.id].avg) }, fmt(p.ratings[q.id].avg)) : h('span', { class: 'muted' }, '–'))));
+    });
+    const table = h('table', null,
+      h('thead', null, h('tr', null, h('th', { class: 'num' }, '#'), h('th', null, 'Person'), h('th', { class: 'num' }, 'Evaluations'), h('th', { class: 'num' }, rankBy === 'overall' ? 'Overall' : 'Score'), ratingQs.map((q, i) => h('th', { class: 'num' + (q.id === rankBy ? ' rank-col' : ''), title: q.text }, q.category || 'Q' + (i + 1))))),
+      h('tbody', null, rows));
+    setTab(
+      h('div', { class: 'card' }, h('h2', null, r.group.name + ': ranking'), controls, h('div', { style: 'height:12px' }),
+        h('p', { class: 'muted small' }, `People ranked by ${rankLabel} (1 to 5) in this survey. Only people with at least ${need} evaluations are ranked (change it above); the others are listed below until they get there. An average built on a few evaluations moves a lot with each new one, so read the score together with the number of evaluations. Equal scores share the same rank, and among equals the person with more evaluations is listed first.`),
+        ranked.length ? h('div', { class: 'table-wrap' }, table) : h('p', { class: 'muted' }, 'Nobody has enough evaluations yet.')),
+      pending.length ? h('div', { class: 'card' }, h('h2', null, `Not ranked yet (${pending.length})`),
+        h('p', { class: 'muted small' }, `Fewer than ${need} evaluations received${rankBy === 'overall' ? '' : ', or no answer on this statement yet'}.`),
+        h('div', { class: 'table-wrap' }, h('table', null, h('thead', null, h('tr', null, h('th', null, 'Person'), h('th', { class: 'num' }, 'Evaluations'))),
+          h('tbody', null, pending.map(p => h('tr', null, h('td', null, h('b', null, p.name), h('div', { class: 'small muted' }, [p.role, p.department].filter(Boolean).join(' · '))), h('td', { class: 'num' }, p.responses))))))) : null,
     );
   }
 
