@@ -85,8 +85,10 @@
     const t = g.targets.find(x => x.id === view.targetId);
     const answers = {};
     const err = h('div', { class: 'alert error', style: 'display:none' });
-    const ratingQs = g.questions.filter(q => q.type === 'rating');
-    const textQs = g.questions.filter(q => q.type === 'text');
+    // Some colleagues (e.g. managers in the operations survey) are evaluated with another survey's statements.
+    const questions = (g.questionSets && g.questionSets[t.questionSet]) || g.questions;
+    const ratingQs = questions.filter(q => q.type === 'rating');
+    const textQs = questions.filter(q => q.type === 'text');
 
     const rows = [];
     ratingQs.forEach((q, i) => {

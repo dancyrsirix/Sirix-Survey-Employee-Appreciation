@@ -216,11 +216,16 @@ route('GET', /^\/api\/admin\/results\/([a-z0-9_-]+)$/, admin((req, res, m) => {
 route('GET', /^\/api\/admin\/results\/([a-z0-9_-]+)\.csv$/, admin((req, res, m) => {
   const r = db.results(m[1]);
   if (!r) return json(res, 404, { error: 'Unknown survey.' });
-  const ratingQs = r.questions.filter(q => q.type === 'rating');
-  const textQs = r.questions.filter(q => q.type === 'text');
-  const lines = [['Department', 'Name', 'Role', 'Responses', 'Overall', ...ratingQs.map(q => q.text), ...textQs.map(q => q.text)].map(csvEscape).join(',')];
+  // One column per statement of the survey, then the statements of any other set used for some people (prefixed with that survey's name).
+  const sets = Object.keys(r.questionSets).filter(id => id !== r.group.id);
+  const label = (id, q) => id === r.group.id ? q.text : `[${(db.getGroup(id) || { name: id }).name}] ${q.text}`;
+  const ratingQs = [], textQs = [];
+  for (const id of [r.group.id, ...sets]) {
+    for (const q of r.questionSets[id]) (q.type === 'rating' ? ratingQs : textQs).push({ ...q, label: label(id, q) });
+  }
+  const lines = [['Department', 'Name', 'Role', 'Statements', 'Responses', 'Overall', ...ratingQs.map(q => q.label), ...textQs.map(q => q.label)].map(csvEscape).join(',')];
   for (const p of r.people) {
-    const row = [p.department, p.name, p.role, p.responses];
+    const row = [p.department, p.name, p.role, (db.getGroup(p.questionSet) || { name: p.questionSet }).name, p.responses];
     if (!p.visible) row.push(`hidden (fewer than ${r.minResponses} responses)`, ...ratingQs.map(() => ''), ...textQs.map(() => ''));
     else {
       row.push(p.overall == null ? '' : p.overall.toFixed(2));
@@ -250,7 +255,7 @@ route('GET', /^\/api\/admin\/links\.csv$/, admin((req, res) => {
 route('POST', /^\/api\/admin\/employees$/, admin(async (req, res) => {
   const body = await readJson(req);
   if (!body.name || !body.department) return json(res, 400, { error: 'Name and department are required.' });
-  json(res, 200, db.createEmployee({ name: String(body.name), department: String(body.department), role: String(body.role || ''), email: String(body.email || ''), groups: Array.isArray(body.groups) ? body.groups : [] }));
+  json(res, 200, db.createEmployee({ name: String(body.name), department: String(body.department), role: String(body.role || ''), email: String(body.email || ''), groups: Array.isArray(body.groups) ? body.groups : [], question_set: String(body.question_set || '') }));
 }));
 route('POST', /^\/api\/admin\/employees\/import$/, admin(async (req, res) => {
   // Two formats, detected from the header row:

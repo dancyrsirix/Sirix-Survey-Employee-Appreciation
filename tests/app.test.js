@@ -326,6 +326,8 @@ test('email: settings, templates, sending personal links through a fake transpor
   assert.match(h, /<li[^>]*>Answers are anonymous/);
   assert.match(h, new RegExp(`>${db.formatCode(emps[0].code)}<`));
   assert.ok(!h.includes('{link}'));
+  assert.match(h, /border-left:3px solid #5fd0b0;[^]*?<div style="font-weight:700;[^"]*">Daniel Cyr<\/div>/, 'signature block');
+  assert.match(h, /President and CEO/);
   const prev = await http('GET', '/api/admin/mail/preview/report');
   assert.equal(prev.status, 200);
   assert.match(prev.text, /See my report/);
@@ -407,6 +409,50 @@ test('legacy French defaults in an existing database are translated on start', (
   assert.deepEqual(after.map(q => q.id), ids);                     // ids (and answers) kept
   assert.equal(after[0].text, 'This person keeps their commitments and follows up without having to be reminded.');
   assert.equal(after[0].category, 'Reliability and follow-up');
+});
+
+test('a person can be evaluated with another survey’s statements (managers in the operations survey)', async () => {
+  seed.restoreDefaultQuestions('ops'); seed.restoreDefaultQuestions('staff');
+  db.updateGroup('ops', { status: 'open' });
+  db.resetResponses();
+  const emps = db.listEmployees();
+  const ops = emps.filter(e => e.groups.includes('ops') && !e.groups.includes('staff'));
+  const manager = ops[0], operator = ops[1], other = ops[2];
+  // Admin sets the override through the API
+  let r = await http('PUT', `/api/admin/employees/${manager.id}`, { question_set: 'staff' });
+  assert.equal(r.status, 200); assert.equal(r.json.question_set, 'staff');
+  r = await http('PUT', `/api/admin/employees/${other.id}`, { question_set: 'nope' });
+  assert.equal(r.json.question_set, '');                                   // unknown survey -> default
+  // The operator's survey payload carries both sets and marks the manager
+  r = await http('GET', `/api/survey/${operator.code}`);
+  const g = r.json.groups.find(x => x.id === 'ops');
+  assert.equal(g.targets.find(t => t.id === manager.id).questionSet, 'staff');
+  assert.equal(g.targets.find(t => t.id === other.id).questionSet, 'ops');
+  assert.equal(g.questionSets.staff[0].category, 'Reliability and follow-up');
+  assert.equal(g.questionSets.ops[0].category, 'Reliability on shift');
+  // Answers about the manager are validated against the staff statements; ops statement ids are ignored
+  const staffQ = g.questionSets.staff[0], opsQ = g.questionSets.ops[0];
+  r = await http('POST', `/api/survey/${operator.code}/submit`, { group_id: 'ops', target_id: manager.id, answers: { [opsQ.id]: 5 } });
+  assert.equal(r.status, 400); assert.match(r.json.error, /nothing to save/);   // the ops statement is not asked about the manager
+  r = await http('POST', `/api/survey/${operator.code}/submit`, { group_id: 'ops', target_id: manager.id, answers: { [staffQ.id]: 4, [opsQ.id]: 5 } });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  for (const ev of ops.slice(2, 4)) assert.ok(!db.submitEvaluation(ev, 'ops', manager.id, { [staffQ.id]: 2 }).error);
+  // Results and report use the manager's own set
+  const res = db.results('ops');
+  const p = res.people.find(x => x.id === manager.id);
+  assert.equal(p.questionSet, 'staff');
+  assert.equal(p.visible, true);
+  assert.ok(p.ratings[staffQ.id] && !p.ratings[opsQ.id]);
+  assert.equal(res.questionSets.staff[0].id, staffQ.id);
+  const rep = db.reportFor('ops', manager.id);
+  assert.equal(rep.categories[0].category, 'Reliability and follow-up');
+  assert.ok(Math.abs(rep.categories[0].mine.avg - (4 + 2 + 2) / 3) < 1e-9);
+  assert.equal(rep.categories[1].mine, null);
+  // CSV export labels the other set's columns
+  r = await http('GET', '/api/admin/results/ops.csv');
+  assert.match(r.text, /\[Work Appreciation Survey \(office staff and management\)\] This person keeps their commitments/);
+  db.resetResponses();
+  await http('PUT', `/api/admin/employees/${manager.id}`, { question_set: '' });
 });
 
 test('operations survey gets the operator-specific statements; an untouched generic set is upgraded only while unanswered', () => {

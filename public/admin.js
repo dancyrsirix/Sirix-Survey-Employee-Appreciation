@@ -105,21 +105,27 @@
 
     // People table
     const rows = [];
+    const setName = id => (ov.groups.find(g => g.id === id) || { name: id }).name;
+    const otherSets = Object.keys(r.questionSets || {}).filter(id => id !== r.group.id);
     for (const p of people) {
+      const ownSet = !p.questionSet || p.questionSet === r.group.id;
+      const pRatingQs = ownSet ? ratingQs : (r.questionSets[p.questionSet] || []).filter(q => q.type === 'rating');
+      const pTextQs = ownSet ? textQs : (r.questionSets[p.questionSet] || []).filter(q => q.type === 'text');
       rows.push(h('tr', { class: 'clickable', onclick: () => { expanded.has(p.id) ? expanded.delete(p.id) : expanded.add(p.id); renderResults(); } },
-        h('td', null, h('b', null, p.name), h('div', { class: 'small muted' }, [p.role, p.department].filter(Boolean).join(' · '))),
+        h('td', null, h('b', null, p.name), h('div', { class: 'small muted' }, [p.role, p.department].filter(Boolean).join(' · ')), ownSet ? null : h('div', { class: 'small muted' }, 'Evaluated with the statements of: ' + setName(p.questionSet))),
         h('td', { class: 'num' }, p.responses),
         h('td', { class: 'num' }, p.visible ? h('span', { class: scoreClass(p.overall) }, fmt(p.overall)) : h('span', { class: 'pill hidden' }, `hidden until ${r.minResponses}`)),
-        ratingQs.map(q => h('td', { class: 'num' }, p.visible && p.ratings[q.id] ? h('span', { class: scoreClass(p.ratings[q.id].avg) }, fmt(p.ratings[q.id].avg)) : '')),
+        ownSet ? ratingQs.map(q => h('td', { class: 'num' }, p.visible && p.ratings[q.id] ? h('span', { class: scoreClass(p.ratings[q.id].avg) }, fmt(p.ratings[q.id].avg)) : ''))
+          : h('td', { colspan: ratingQs.length, class: 'small muted' }, p.visible ? 'Other statements: click the row for the breakdown' : ''),
       ));
       if (expanded.has(p.id) && p.visible) {
         rows.push(h('tr', null, h('td', { colspan: 3 + ratingQs.length }, h('div', { class: 'detail' },
-          ratingQs.map((q, i) => {
+          pRatingQs.map((q, i) => {
             const s = p.ratings[q.id];
             return h('div', { class: 'small', style: 'margin-bottom:4px' }, h('b', null, (q.category || 'Q' + (i + 1)) + ': '), q.text, ' ',
               s ? [h('span', { class: scoreClass(s.avg) }, fmt(s.avg)), ` (${s.n} answers)`, h('span', { class: 'dist', title: '1 to 5 distribution: ' + s.dist.join(' / ') }, s.dist.map(n => h('span', { style: `height:${4 + n * 4}px` })))] : h('span', { class: 'muted' }, 'no answers'));
           }),
-          textQs.map(q => h('div', null, h('h3', null, q.text), (p.comments[q.id] || []).length ? h('ul', null, p.comments[q.id].map(c => h('li', null, c))) : h('p', { class: 'muted small' }, 'No comments.'))),
+          pTextQs.map(q => h('div', null, h('h3', null, q.text), (p.comments[q.id] || []).length ? h('ul', null, p.comments[q.id].map(c => h('li', null, c))) : h('p', { class: 'muted small' }, 'No comments.'))),
         ))));
       }
     }
@@ -130,7 +136,7 @@
     setTab(
       h('div', { class: 'card' }, h('h2', null, r.group.name), controls, h('div', { style: 'height:12px' }), stats),
       h('div', { class: 'card' }, h('h2', null, 'By department'), h('p', { class: 'muted small' }, 'Average score across all evaluations received by people in the department (1 to 5).'), h('div', { class: 'table-wrap' }, deptTable)),
-      h('div', { class: 'card' }, h('h2', null, 'By person'), h('p', { class: 'muted small' }, 'Click a row to see the breakdown and written comments. People with fewer evaluations than the minimum stay hidden to protect anonymity.'), h('div', { class: 'table-wrap' }, peopleTable),
+      h('div', { class: 'card' }, h('h2', null, 'By person'), h('p', { class: 'muted small' }, 'Click a row to see the breakdown and written comments. People with fewer evaluations than the minimum stay hidden to protect anonymity.', otherSets.length ? ' Some people are evaluated with the statements of another survey (set per person in the Employees tab); their breakdown is in the row detail and the department columns only cover this survey’s statements.' : ''), h('div', { class: 'table-wrap' }, peopleTable),
         h('h3', null, 'Statements'), h('ol', { class: 'small muted' }, ratingQs.map(q => h('li', null, q.category ? [h('b', null, q.category + ': '), q.text] : q.text)))),
     );
   }
@@ -142,7 +148,7 @@
     const rows = ov.employees.map(e => h('tr', null,
       h('td', null, h('b', null, e.name), h('div', { class: 'small muted' }, [e.role, e.email].filter(Boolean).join(' · '))),
       h('td', null, e.department),
-      h('td', null, e.groups.map(g => h('span', { class: 'pill todo', style: 'margin-right:4px', title: groupName(g) }, groupShort(g)))),
+      h('td', null, e.groups.map(g => h('span', { class: 'pill todo', style: 'margin-right:4px', title: groupName(g) }, groupShort(g))), e.question_set ? h('div', { class: 'small muted', title: 'Evaluated with the statements of ' + groupName(e.question_set) + ' in every survey' }, groupShort(e.question_set) + ' statements') : null),
       h('td', null, h('span', { class: 'pill ' + (e.started ? 'done' : 'hidden') }, e.started ? 'started' : 'not yet')),
       h('td', null, e.inviteSentAt ? h('span', { class: 'pill done', title: 'Personal link emailed ' + fmtDate(e.inviteSentAt) }, 'link sent') : h('span', { class: 'pill hidden' }, e.email ? 'not sent' : 'no email'), e.reportSentAt ? [' ', h('span', { class: 'pill released', title: 'Report notice emailed ' + fmtDate(e.reportSentAt) }, 'report sent')] : null),
       h('td', null, h('code', null, e.code), ' ', h('button', { class: 'link small', onclick: () => { navigator.clipboard.writeText(`${ov.baseUrl}/s/${e.code.replace('-', '')}`); toast('Link copied'); } }, 'copy link')),
@@ -184,15 +190,20 @@
     const role = h('input', { type: 'text', value: e ? e.role : '' });
     const email = h('input', { type: 'email', value: e ? e.email : '' });
     const checks = ov.groups.map(g => { const c = h('input', { type: 'checkbox', checked: e ? e.groups.includes(g.id) : g.id === 'staff' }); return { g, c }; });
+    const qset = h('select', null,
+      h('option', { value: '', selected: !(e && e.question_set) }, 'The statements of the survey being taken (default)'),
+      ov.groups.map(g => h('option', { value: g.id, selected: !!(e && e.question_set === g.id) }, 'Always the statements of: ' + g.name)));
     const err = h('div', { class: 'alert error', style: 'display:none' });
     const dialog = h('dialog', { style: 'border:none;border-radius:12px;padding:0;max-width:520px;width:95%' }, h('div', { class: 'card', style: 'margin:0' },
       h('h2', null, e ? 'Edit employee' : 'Add employee'),
       h('label', null, 'Name'), name, h('label', null, 'Department'), dept, h('datalist', { id: 'depts' }, [...new Set(ov.employees.map(x => x.department))].map(d => h('option', { value: d }))),
       h('label', null, 'Role (optional)'), role, h('label', null, 'Email (optional, for sending the link)'), email,
       h('label', null, 'Surveys'), checks.map(({ g, c }) => h('label', { style: 'font-weight:400;margin:4px 0' }, c, ' ', g.name)),
+      h('label', null, 'Statements used when this person is evaluated'), qset,
+      h('p', { class: 'muted small' }, 'For someone who is not an operator but is evaluated in the operations survey (a manager, a technician), choose the office staff statements so operators rate them on the same things as everyone else.'),
       err,
       h('div', { class: 'actions' }, h('button', { onclick: async () => {
-        const body = { name: name.value, department: dept.value, role: role.value, email: email.value, groups: checks.filter(x => x.c.checked).map(x => x.g.id) };
+        const body = { name: name.value, department: dept.value, role: role.value, email: email.value, groups: checks.filter(x => x.c.checked).map(x => x.g.id), question_set: qset.value };
         try { await api(e ? 'PUT' : 'POST', e ? `/api/admin/employees/${e.id}` : '/api/admin/employees', body); dialog.close(); dialog.remove(); await loadOverview(); resultsCache = {}; render(); }
         catch (ex) { err.textContent = ex.message; err.style.display = 'block'; }
       } }, 'Save'), h('button', { class: 'secondary', onclick: () => { dialog.close(); dialog.remove(); } }, 'Cancel')),
