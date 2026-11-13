@@ -395,18 +395,40 @@ test('email: the SMTP client speaks the protocol (EHLO, AUTH PLAIN, MAIL, RCPT, 
 });
 
 test('legacy French defaults in an existing database are translated on start', () => {
-  db.updateGroup('ops', { name: 'Sondage d’appréciation du travail (opérations)' });
-  const qs = db.listQuestions('ops');
+  db.updateGroup('staff', { name: 'Sondage d’appréciation du travail (employés de bureau et direction)' });
+  const qs = db.listQuestions('staff');
   const fr = ['Cette personne respecte ses engagements et fait les suivis nécessaires sans qu’on ait à la relancer.', 'Cette personne répond dans un délai raisonnable et communique de façon claire et précise.', 'Cette personne est disponible quand j’ai besoin d’elle et collabore bien avec les autres.', 'Cette personne est respectueuse, agréable à côtoyer et ouverte aux autres points de vue.', 'Je peux me fier à la qualité du travail de cette personne.', 'Commentaire constructif pour cette personne'];
-  seed.restoreDefaultQuestions('ops');
-  const ids = db.listQuestions('ops').map(q => q.id);
-  db.replaceQuestions('ops', fr.map((text, i) => ({ id: ids[i], text, type: i === 5 ? 'text' : 'rating', category: 'X' })));
+  seed.restoreDefaultQuestions('staff');
+  const ids = db.listQuestions('staff').map(q => q.id);
+  db.replaceQuestions('staff', fr.map((text, i) => ({ id: ids[i], text, type: i === 5 ? 'text' : 'rating', category: 'X' })));
   seed.ensureDefaults();
-  assert.equal(db.getGroup('ops').name, 'Work Appreciation Survey (operations)');
-  const after = db.listQuestions('ops');
+  assert.equal(db.getGroup('staff').name, 'Work Appreciation Survey (office staff and management)');
+  const after = db.listQuestions('staff');
   assert.deepEqual(after.map(q => q.id), ids);                     // ids (and answers) kept
   assert.equal(after[0].text, 'This person keeps their commitments and follows up without having to be reminded.');
   assert.equal(after[0].category, 'Reliability and follow-up');
+});
+
+test('operations survey gets the operator-specific statements; an untouched generic set is upgraded only while unanswered', () => {
+  const cats = () => db.listQuestions('ops').filter(q => q.type === 'rating').map(q => q.category);
+  seed.restoreDefaultQuestions('ops');
+  assert.deepEqual(cats(), ['Reliability on shift', 'Shift communication and handovers', 'Availability and collaboration', 'People skills', 'Event handling']);
+  // Database left by an earlier version: generic set on ops, no answers -> upgraded on start
+  db.replaceQuestions('ops', seed.FIVE_QUESTIONS);
+  assert.equal(cats()[0], 'Reliability and follow-up');
+  seed.ensureDefaults();
+  assert.equal(cats()[4], 'Event handling');
+  // Same, but with an answer already recorded -> left alone
+  db.replaceQuestions('ops', seed.FIVE_QUESTIONS);
+  const members = db.listEmployees().filter(e => e.groups.includes('ops'));
+  const q = db.listQuestions('ops')[0];
+  db.updateGroup('ops', { status: 'open' });
+  const r = db.submitEvaluation(members[0], 'ops', members[1].id, { [q.id]: 4 });
+  assert.ok(!r.error, r.error);
+  seed.ensureDefaults();
+  assert.equal(cats()[0], 'Reliability and follow-up');
+  db.resetResponses();
+  seed.restoreDefaultQuestions('ops');
 });
 
 test('logout clears the session', async () => {
