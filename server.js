@@ -251,10 +251,11 @@ route('GET', /^\/api\/admin\/evaluations\/([a-z0-9_-]+)\.csv$/, admin((req, res,
   for (const id of [r.group.id, ...sets]) {
     for (const q of r.questionSets[id]) (q.type === 'rating' ? ratingQs : textQs).push({ ...q, label: label(id, q) });
   }
-  const lines = [['Evaluator', 'Evaluated', 'Department', 'Role', 'Overall', ...ratingQs.map(q => q.label), ...textQs.map(q => q.label)].map(csvEscape).join(',')];
+  const lines = [['Evaluator', 'Attribution', 'Evaluated', 'Department', 'Role', 'Overall', ...ratingQs.map(q => q.label), ...textQs.map(q => q.label)].map(csvEscape).join(',')];
+  const who = ev => ev.evaluator || (ev.attribution === 'possible' ? 'One of: ' + ev.candidates.join(' / ') : 'Anonymous (before names were recorded)');
   for (const p of r.people) {
     for (const ev of p.evaluations) {
-      lines.push([ev.evaluator || 'Submitted before names were recorded', p.name, p.department, p.role, ev.overall == null ? '' : ev.overall.toFixed(2),
+      lines.push([who(ev), ev.attribution, p.name, p.department, p.role, ev.overall == null ? '' : ev.overall.toFixed(2),
         ...ratingQs.map(q => ev.ratings[q.id] ?? ''), ...textQs.map(q => ev.comments[q.id] || '')].map(csvEscape).join(','));
     }
   }

@@ -167,14 +167,19 @@
         const evalTable = h('table', null,
           h('thead', null, h('tr', null, h('th', null, 'Written by'), h('th', { class: 'num' }, 'Overall'), pRatingQs.map((q, i) => h('th', { class: 'num', title: q.text }, q.category || 'Q' + (i + 1))), h('th', null, 'Comment'))),
           h('tbody', null, evals.map(ev => h('tr', null,
-            h('td', null, ev.evaluator ? h('b', null, ev.evaluator) : h('span', { class: 'muted' }, 'Submitted before names were recorded')),
+            h('td', null, ev.attribution === 'recorded' ? h('b', null, ev.evaluator)
+              : ev.attribution === 'deduced' ? [h('b', { class: 'deduced' }, ev.evaluator), ' ', h('span', { class: 'pill todo', title: 'Submitted before names were recorded; the author was deduced by elimination (only one person had finished this colleague) and agreed to be named' }, 'deduced')]
+              : ev.attribution === 'possible' ? [h('span', { class: 'possible' }, 'One of: ' + ev.candidates.join(', ')), ' ', h('span', { class: 'pill closed', title: 'Submitted before names were recorded; several people had finished this colleague, so it cannot be narrowed down further. All of them agreed to be named.' }, 'uncertain')]
+              : h('span', { class: 'muted' }, 'Anonymous (before names were recorded)')),
             h('td', { class: 'num' }, ev.overall == null ? '' : h('span', { class: scoreClass(ev.overall) }, fmt(ev.overall))),
             pRatingQs.map(q => h('td', { class: 'num' }, ev.ratings[q.id] == null ? h('span', { class: 'muted' }, 'N/A') : h('span', { class: scoreClass(ev.ratings[q.id]) }, String(ev.ratings[q.id])))),
             h('td', { class: 'small' }, pTextQs.map(q => ev.comments[q.id] || '').filter(Boolean).join(' | ')),
           ))));
         rows.push(h('tr', null, h('td', { colspan: 3 + ratingQs.length }, h('div', { class: 'detail' },
           h('h3', null, `Each evaluation received (${evals.length})`),
-          h('p', { class: 'muted small' }, 'Confidential: only you see who wrote what. Employees only ever receive averages and comments in random order.'),
+          h('p', { class: 'muted small' }, 'Confidential: only you see who wrote what. Employees only ever receive averages and comments in random order. ',
+            h('b', null, 'Bold name'), ': recorded when submitted. ', h('span', { class: 'pill todo' }, 'deduced'), ': submitted before names were recorded, author worked out by elimination, person agreed to be named. ',
+            h('span', { class: 'pill closed' }, 'uncertain'), ': one of several people who all agreed. ', h('b', null, 'Anonymous'), ': cannot be narrowed down, or a possible author did not agree.'),
           evals.length ? h('div', { class: 'table-wrap' }, evalTable) : h('p', { class: 'muted small' }, 'No evaluations yet.'),
           p.visible ? h('h3', null, 'Averages') : h('p', { class: 'muted small' }, `Averages and the personal report appear once ${r.minResponses} evaluations are in.`),
           !p.visible ? null : pRatingQs.map((q, i) => {
@@ -195,12 +200,12 @@
       h('div', { class: 'card' }, h('h2', null, 'By person'), h('p', { class: 'muted small' }, 'Click a row to see each evaluation received, with the name of the person who wrote it, and the averages. Averages (and the personal report an employee receives) only appear once the minimum number of evaluations is reached, so that no employee can work out who wrote what by elimination.', otherSets.length ? ' Some people are evaluated with the statements of another survey (set per person in the Employees tab); their breakdown is in the row detail and the department columns only cover this survey’s statements.' : ''), h('div', { class: 'table-wrap' }, peopleTable),
         h('h3', null, 'Statements'), h('ol', { class: 'small muted' }, ratingQs.map(q => h('li', null, q.category ? [h('b', null, q.category + ': '), q.text] : q.text)))),
       h('div', { class: 'card' }, h('h2', null, 'By evaluator'),
-        h('p', { class: 'muted small' }, 'Who evaluated whom in this survey, with the overall score they gave. Confidential: only you see this.', r.unattributed ? ` ${r.unattributed} evaluation(s) were submitted before names were recorded and cannot be attributed.` : ''),
+        h('p', { class: 'muted small' }, 'Who evaluated whom in this survey, with the overall score they gave. Confidential: only you see this.', r.unattributed ? ` ${r.unattributed} evaluation(s) were submitted before names were recorded and cannot be attributed to one person.` : ''),
         (r.evaluators || []).length ? h('div', { class: 'table-wrap' }, h('table', null,
           h('thead', null, h('tr', null, h('th', null, 'Evaluator'), h('th', { class: 'num' }, 'Evaluations'), h('th', null, 'Evaluated (overall score given)'))),
           h('tbody', null, r.evaluators.map(ev => h('tr', null,
             h('td', null, h('b', null, ev.name)), h('td', { class: 'num' }, ev.targets.length),
-            h('td', { class: 'small' }, ev.targets.map((t, i) => [i ? ', ' : '', t.name, t.overall == null ? '' : [' ', h('span', { class: scoreClass(t.overall) }, fmt(t.overall))]]))))))) : h('p', { class: 'muted small' }, 'No named evaluations yet.')),
+            h('td', { class: 'small' }, ev.targets.map((t, i) => [i ? ', ' : '', t.name, t.attribution === 'deduced' ? h('span', { class: 'pill todo', style: 'margin-left:3px;font-size:10px;padding:0 5px' }, 'deduced') : null, t.overall == null ? '' : [' ', h('span', { class: scoreClass(t.overall) }, fmt(t.overall))]]))))))) : h('p', { class: 'muted small' }, 'No named evaluations yet.')),
     );
   }
 
@@ -213,6 +218,8 @@
       h('td', null, e.department),
       h('td', null, e.groups.map(g => h('span', { class: 'pill todo', style: 'margin-right:4px', title: groupName(g) }, groupShort(g))), e.question_set ? h('div', { class: 'small muted', title: 'Evaluated with the statements of ' + groupName(e.question_set) + ' in every survey' }, groupShort(e.question_set) + ' statements') : null),
       h('td', null, h('span', { class: 'pill ' + (e.started ? 'done' : 'hidden') }, e.started ? `${e.evaluated} evaluated` : 'not yet')),
+      h('td', null, h('label', { class: 'small', style: 'font-weight:400;white-space:nowrap;margin:0', title: 'Tick when this person agreed that evaluations they submitted before names were recorded may be shown with their name' },
+        h('input', { type: 'checkbox', checked: !!e.names_consent, onchange: async (ev) => { try { await api('PUT', `/api/admin/employees/${e.id}`, { names_consent: ev.target.checked }); e.names_consent = ev.target.checked ? 1 : 0; resultsCache = {}; toast('Saved'); } catch (ex) { ev.target.checked = !ev.target.checked; toast(ex.message, 'error'); } } }), ' agreed')),
       h('td', null, e.inviteSentAt ? h('span', { class: 'pill done', title: 'Personal link emailed ' + fmtDate(e.inviteSentAt) }, 'link sent') : h('span', { class: 'pill hidden' }, e.email ? 'not sent' : 'no email'), e.reportSentAt ? [' ', h('span', { class: 'pill released', title: 'Report notice emailed ' + fmtDate(e.reportSentAt) }, 'report sent')] : null),
       h('td', null, h('code', null, e.code), ' ', h('button', { class: 'link small', onclick: () => { navigator.clipboard.writeText(`${ov.baseUrl}/s/${e.code.replace('-', '')}`); toast('Link copied'); } }, 'copy link')),
       h('td', null, h('div', { class: 'row', style: 'gap:6px' },
@@ -232,7 +239,7 @@
         h('div', { class: 'actions' }, h('button', { class: 'accent', onclick: () => { tab = 'email'; render(); } }, 'Email the personal links to everyone'), h('a', { class: 'btn', href: '/api/admin/links.csv', style: 'text-decoration:none;background:#fff;color:#1a1a1a' }, 'Download all links (CSV)'), h('button', { class: 'secondary', onclick: () => editEmployee(null) }, 'Add one employee')),
       ),
       h('div', { class: 'card' }, h('h2', null, `Employees (${ov.employees.length})`), h('div', { class: 'table-wrap' }, h('table', null,
-        h('thead', null, h('tr', null, h('th', null, 'Name'), h('th', null, 'Department'), h('th', null, 'Surveys'), h('th', null, 'Participation'), h('th', null, 'Emailed'), h('th', null, 'Code'), h('th', null, ''))),
+        h('thead', null, h('tr', null, h('th', null, 'Name'), h('th', null, 'Department'), h('th', null, 'Surveys'), h('th', null, 'Participation'), h('th', { title: 'Agreed that their evaluations from before names were recorded may be shown with their name' }, 'Earlier evaluations'), h('th', null, 'Emailed'), h('th', null, 'Code'), h('th', null, ''))),
         h('tbody', null, rows)))),
       h('div', { class: 'card' },
         h('h2', null, 'Import employees from a list'),

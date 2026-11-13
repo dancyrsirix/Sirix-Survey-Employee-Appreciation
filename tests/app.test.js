@@ -141,6 +141,35 @@ test('each evaluation is stored with its author, shown to the admin only', async
   assert.equal(pc.evaluations.length, 1);
   assert.equal(pc.evaluations[0].evaluator, null);
   assert.equal(r2.unattributed, 1);
+  // deducing the author of an earlier evaluation by elimination, only for people who agreed to be named
+  const [dave, erin] = emps.filter(e => e.groups.includes('staff') && ![alice.id, bob.id, carol.id].includes(e.id));
+  db.db.prepare('INSERT INTO completions (evaluator_id, target_id, group_id) VALUES (?, ?, ?)').run(dave.id, carol.id, 'staff');
+  let pc2 = (await http('GET', '/api/admin/results/staff')).json.people.find(x => x.id === carol.id).evaluations[0];
+  assert.equal(pc2.attribution, 'anonymous');
+  assert.equal(pc2.evaluator, null);
+  assert.equal((await http('PUT', `/api/admin/employees/${dave.id}`, { names_consent: true })).status, 200);
+  assert.equal(db.getEmployee(dave.id).names_consent, 1);
+  const r3 = (await http('GET', '/api/admin/results/staff')).json;
+  pc2 = r3.people.find(x => x.id === carol.id).evaluations[0];
+  assert.equal(pc2.attribution, 'deduced');
+  assert.equal(pc2.evaluator, dave.name);
+  assert.equal(r3.evaluators.find(e => e.name === dave.name).targets[0].attribution, 'deduced');
+  assert.equal(r3.unattributed, 0);
+  db.db.prepare('INSERT INTO completions (evaluator_id, target_id, group_id) VALUES (?, ?, ?)').run(erin.id, carol.id, 'staff');
+  pc2 = (await http('GET', '/api/admin/results/staff')).json.people.find(x => x.id === carol.id).evaluations[0];
+  assert.equal(pc2.attribution, 'anonymous', 'a possible author who did not agree keeps it anonymous');
+  await http('PUT', `/api/admin/employees/${erin.id}`, { names_consent: true });
+  pc2 = (await http('GET', '/api/admin/results/staff')).json.people.find(x => x.id === carol.id).evaluations[0];
+  assert.equal(pc2.attribution, 'possible');
+  assert.deepEqual(pc2.candidates, [dave.name, erin.name].sort());
+  assert.equal(pc2.evaluator, null);
+  const evCsv = (await http('GET', '/api/admin/evaluations/staff.csv')).text;
+  assert.match(evCsv, new RegExp(`One of: .*,possible,"?${carol.name}`));
+  await http('PUT', `/api/admin/employees/${dave.id}`, { names_consent: false });
+  await http('PUT', `/api/admin/employees/${erin.id}`, { names_consent: false });
+  db.db.prepare('DELETE FROM completions WHERE target_id = ? AND evaluator_id IN (?, ?)').run(carol.id, dave.id, erin.id);
+  // the employee-facing report never carries attribution either
+  assert.equal(JSON.stringify(db.reportFor('staff', carol.id)).includes(dave.name), false);
   // activity feed for the admin's notification bell: newest first, timestamped rows only
   const act = (await http('GET', '/api/admin/activity')).json;
   assert.equal(act.items.length, 1);
@@ -154,8 +183,8 @@ test('each evaluation is stored with its author, shown to the admin only', async
   // CSV with one line per evaluation
   const csv = await http('GET', '/api/admin/evaluations/staff.csv');
   assert.equal(csv.status, 200);
-  assert.match(csv.text, new RegExp(`^"?${alice.name}"?,"?${bob.name}"?,`, 'm'));
-  assert.match(csv.text, /Submitted before names were recorded/);
+  assert.match(csv.text, new RegExp(`^"?${alice.name}"?,recorded,"?${bob.name}"?,`, 'm'));
+  assert.match(csv.text, /Anonymous \(before names were recorded\)/);
   // the employee-facing report never carries the per-evaluation detail
   const rep = db.reportFor('staff', bob.id);
   assert.equal(rep.person.evaluations, undefined);
